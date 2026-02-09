@@ -1,8 +1,8 @@
-use std::error::Error;
-
+use crossterm::event::KeyEventKind;
 use edtui::{EditorEventHandler, EditorState, EditorView, SyntaxHighlighter};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use ratatui::{prelude::*, widgets::Widget};
+use std::error::Error;
 
 use crate::term::Term;
 use crate::theme::Theme;
@@ -39,17 +39,21 @@ impl App {
     pub fn handle_events(&mut self, #[allow(unused)] term: &mut Term) -> Result<()> {
         let event = event::read()?;
 
-        if let Event::Key(key) = event {
-            if key.code == KeyCode::Char('c') && key.modifiers == KeyModifiers::CONTROL {
-                self.should_quit = true;
-                return Ok(());
+        if let Event::Key(key_event) = &event {
+            if key_event.kind == KeyEventKind::Press {
+                if key_event.code == KeyCode::Char('c')
+                    && key_event.modifiers == KeyModifiers::CONTROL
+                {
+                    self.should_quit = true;
+                    return Ok(());
+                }
+                
+                self.context
+                    .event_handler
+                    .on_event(event, &mut self.context.state);
             }
-        };
-
-        self.context
-            .event_handler
-            .on_event(event, &mut self.context.state);
-
+        }
+        
         Ok(())
     }
 }
