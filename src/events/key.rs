@@ -490,6 +490,79 @@ fn vim_keybindings() -> HashMap<KeyEventRegister, Action> {
             KeyEventRegister::v(vec![KeyInput::new('i'), KeyInput::new(']')]),
             SelectInnerBetween::new('[', ']').into(),
         ),
+        // Delete inner word between delimiters
+        (
+            KeyEventRegister::n(vec![
+                KeyInput::new('d'),
+                KeyInput::new('i'),
+                KeyInput::new('w'),
+            ]),
+            ChangeInnerWord.into(),
+        ),
+        (
+            KeyEventRegister::n(vec![
+                KeyInput::new('d'),
+                KeyInput::new('i'),
+                KeyInput::new('"'),
+            ]),
+            ChangeInnerBetween::new('"', '"').into(),
+        ),
+        (
+            KeyEventRegister::n(vec![
+                KeyInput::new('d'),
+                KeyInput::new('i'),
+                KeyInput::new('\''),
+            ]),
+            ChangeInnerBetween::new('\'', '\'').into(),
+        ),
+        (
+            KeyEventRegister::n(vec![
+                KeyInput::new('d'),
+                KeyInput::new('i'),
+                KeyInput::new('('),
+            ]),
+            ChangeInnerBetween::new('(', ')').into(),
+        ),
+        (
+            KeyEventRegister::n(vec![
+                KeyInput::new('d'),
+                KeyInput::new('i'),
+                KeyInput::new(')'),
+            ]),
+            ChangeInnerBetween::new('(', ')').into(),
+        ),
+        (
+            KeyEventRegister::n(vec![
+                KeyInput::new('d'),
+                KeyInput::new('i'),
+                KeyInput::new('{'),
+            ]),
+            ChangeInnerBetween::new('{', '}').into(),
+        ),
+        (
+            KeyEventRegister::n(vec![
+                KeyInput::new('d'),
+                KeyInput::new('i'),
+                KeyInput::new('}'),
+            ]),
+            ChangeInnerBetween::new('{', '}').into(),
+        ),
+        (
+            KeyEventRegister::n(vec![
+                KeyInput::new('d'),
+                KeyInput::new('i'),
+                KeyInput::new('['),
+            ]),
+            ChangeInnerBetween::new('[', ']').into(),
+        ),
+        (
+            KeyEventRegister::n(vec![
+                KeyInput::new('d'),
+                KeyInput::new('i'),
+                KeyInput::new(']'),
+            ]),
+            ChangeInnerBetween::new('[', ']').into(),
+        ),
         // Change inner word between delimiters
         (
             KeyEventRegister::n(vec![
