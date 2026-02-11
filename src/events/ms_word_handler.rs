@@ -9,7 +9,7 @@ use crate::EditorState;
 /// - Shift + movement in Insert enters Visual mode
 /// - Movement without Shift in Visual clears selection and returns to Insert
 /// - Typing a character (no Ctrl/Alt) in Visual deletes selection and inserts the character
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MsWordEditorEventHandler {
     inner: EditorEventHandler,
 }

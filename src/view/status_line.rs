@@ -10,6 +10,10 @@ pub struct EditorStatusLine {
     mode: String,
     /// The current search buffer. Shown only in search mode.
     search: Option<String>,
+    /// An optional label displayed alongside the mode (e.g. keybinding name).
+    label: Option<String>,
+    /// The style for the label of the status line
+    style_label: Option<Style>,
     /// The style for the mode of the status line
     style_mode: Option<Style>,
     /// The style for the search of the status line
@@ -18,6 +22,8 @@ pub struct EditorStatusLine {
     style_line: Style,
     /// Horizontal alignment of the status bar
     alignment: HorizontalAlignment,
+    /// Whether to show the mode text (e.g. Normal/Insert/Visual).
+    show_mode: bool,
 }
 
 impl Default for EditorStatusLine {
@@ -28,10 +34,13 @@ impl Default for EditorStatusLine {
         Self {
             mode: String::new(),
             search: None,
+            label: None,
+            style_label: None,
             style_mode: Some(Style::default().fg(WHITE).bg(DARK_GRAY).bold()),
             style_search: Some(Style::default().fg(WHITE).bg(DARK_GRAY)),
             style_line: Style::default().fg(WHITE).bg(DARK_GRAY),
             alignment: HorizontalAlignment::Left,
+            show_mode: true,
         }
     }
 }
@@ -118,18 +127,54 @@ impl EditorStatusLine {
         self.alignment = alignment;
         self
     }
+
+    /// Set a label to display in the status line (e.g. keybinding name).
+    #[must_use]
+    pub fn label<S: Into<String>>(mut self, label: S) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    /// Overwrite the style for the status line label.
+    #[must_use]
+    pub fn style_label(mut self, style: impl Into<Option<Style>>) -> Self {
+        self.style_label = style.into();
+        self
+    }
+
+    /// Set whether to show the mode text (Normal/Insert/Visual).
+    /// When false, the mode is hidden (useful for non-Vim keybindings).
+    #[must_use]
+    pub fn show_mode(mut self, show: bool) -> Self {
+        self.show_mode = show;
+        self
+    }
 }
 
 impl Widget for EditorStatusLine {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        // Build the primary display text: "Label | Mode", "Label", or "Mode"
+        let display_text = match (&self.label, self.show_mode) {
+            (Some(label), true) if !self.mode.is_empty() => format!(" {} | {} ", label, self.mode),
+            (Some(label), _) => format!(" {} ", label),
+            (None, true) => format!("{:^10}", self.mode),
+            (None, false) => String::new(),
+        };
+
+        let display_width = display_text.len() as u16;
+
         let constraints = match self.alignment {
-            HorizontalAlignment::Left => vec![Constraint::Length(10), Constraint::Min(1)],
+            HorizontalAlignment::Left => {
+                vec![Constraint::Length(display_width), Constraint::Min(1)]
+            }
             HorizontalAlignment::Center => vec![
                 Constraint::Min(1),
-                Constraint::Length(10),
+                Constraint::Length(display_width),
                 Constraint::Min(1),
             ],
-            HorizontalAlignment::Right => vec![Constraint::Min(1), Constraint::Length(10)],
+            HorizontalAlignment::Right => {
+                vec![Constraint::Min(1), Constraint::Length(display_width)]
+            }
         };
 
         let layout = Layout::horizontal(constraints).split(area);
@@ -139,8 +184,11 @@ impl Widget for EditorStatusLine {
             Some(search) => format!("/{search}"),
         };
 
-        let mode_span = Span::raw(format!("{:^10}", self.mode))
-            .style(self.style_mode.unwrap_or(self.style_line));
+        let display_style = self
+            .style_label
+            .or(self.style_mode)
+            .unwrap_or(self.style_line);
+        let display_span = Span::raw(display_text).style(display_style);
         let search_span =
             Span::raw(search_text).style(self.style_search.unwrap_or(self.style_line));
 
@@ -150,15 +198,15 @@ impl Widget for EditorStatusLine {
 
         match self.alignment {
             HorizontalAlignment::Left => {
-                mode_span.render(layout[0], buf);
+                display_span.render(layout[0], buf);
                 search_span.render(layout[1], buf);
             }
             HorizontalAlignment::Center => {
-                mode_span.render(layout[1], buf);
+                display_span.render(layout[1], buf);
                 search_span.render(layout[2], buf);
             }
             HorizontalAlignment::Right => {
-                mode_span.render(layout[1], buf);
+                display_span.render(layout[1], buf);
                 search_span.render(layout[0], buf);
             }
         }

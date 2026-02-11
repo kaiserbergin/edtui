@@ -14,7 +14,7 @@ use crate::helper::max_col;
 use crate::{Index2, Lines};
 
 /// Represents the state of an editor.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct EditorState {
     /// The text in the editor.
     pub lines: Lines,

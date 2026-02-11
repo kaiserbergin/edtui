@@ -17,7 +17,7 @@ use crate::{events::paste::PasteEventHandler, EditorState};
 use crossterm::event::Event as CTEvent;
 
 /// Handles key and mouse events.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct EditorEventHandler {
     pub key_handler: KeyEventHandler,
 }
