@@ -33,8 +33,8 @@ pub use self::search::{
     SelectCurrentSearch, StopSearch,
 };
 pub use self::select::{
-    ChangeInnerBetween, ChangeInnerWord, ChangeSelection, SelectInnerBetween, SelectInnerWord,
-    SelectLine,
+    ChangeAroundWord, ChangeInnerBetween, ChangeInnerWord, ChangeSelection, ChangeWord,
+    SelectAroundWord, SelectInnerBetween, SelectInnerWord, SelectLine,
 };
 
 #[enum_dispatch(Execute)]
@@ -71,8 +71,11 @@ pub enum Action {
     JoinLineWithLineBelow(JoinLineWithLineBelow),
     SelectInnerBetween(SelectInnerBetween),
     SelectInnerWord(SelectInnerWord),
+    SelectAroundWord(SelectAroundWord),
     ChangeInnerBetween(ChangeInnerBetween),
     ChangeInnerWord(ChangeInnerWord),
+    ChangeAroundWord(ChangeAroundWord),
+    ChangeWord(ChangeWord),
     ChangeSelection(ChangeSelection),
     SelectLine(SelectLine),
     Undo(Undo),
@@ -92,6 +95,37 @@ pub enum Action {
     RemoveCharFromSearch(RemoveCharFromSearch),
     #[cfg(feature = "system-editor")]
     OpenSystemEditor(OpenSystemEditor),
+}
+
+impl Action {
+    /// Returns an action with the given count applied, for bindings that accept a numeric prefix.
+    /// For other actions, returns `self` unchanged.
+    #[must_use]
+    pub fn with_count(self, n: usize) -> Self {
+        match self {
+            Action::MoveForward(_) => Action::MoveForward(MoveForward(n)),
+            Action::MoveBackward(_) => Action::MoveBackward(MoveBackward(n)),
+            Action::MoveUp(_) => Action::MoveUp(MoveUp(n)),
+            Action::MoveDown(_) => Action::MoveDown(MoveDown(n)),
+            Action::MoveWordForward(_) => Action::MoveWordForward(MoveWordForward(n)),
+            Action::MoveWordForwardToEndOfWord(_) => {
+                Action::MoveWordForwardToEndOfWord(MoveWordForwardToEndOfWord(n))
+            }
+            Action::MoveWordBackward(_) => Action::MoveWordBackward(MoveWordBackward(n)),
+            Action::RemoveChar(_) => Action::RemoveChar(RemoveChar(n)),
+            Action::DeleteChar(_) => Action::DeleteChar(DeleteChar(n)),
+            Action::DeleteCharForward(_) => Action::DeleteCharForward(DeleteCharForward(n)),
+            Action::DeleteLine(_) => Action::DeleteLine(DeleteLine(n)),
+            Action::ChangeWord(_) => Action::ChangeWord(ChangeWord(n)),
+            Action::Composed(Composed(mut actions)) => {
+                if let Some(last) = actions.pop() {
+                    actions.push(last.with_count(n));
+                }
+                Action::Composed(Composed(actions))
+            }
+            _ => self,
+        }
+    }
 }
 
 #[enum_dispatch]

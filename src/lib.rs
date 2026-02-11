@@ -299,7 +299,7 @@ mod helper;
 mod state;
 mod view;
 
-pub use events::EditorEventHandler;
+pub use events::{EditorEventHandler, MsWordEditorEventHandler};
 pub use state::{mode::EditorMode, EditorState};
 pub use view::{theme::EditorTheme, EditorStatusLine, EditorView, LineNumbers};
 

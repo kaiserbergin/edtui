@@ -40,6 +40,9 @@ name = "test_text"
 name = "emacs"
 
 [[example]]
+name = "windows"
+
+[[example]]
 name = "custom_keybindings"
 
 [[example]]

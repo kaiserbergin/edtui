@@ -1,24 +1,10 @@
 pub(crate) mod deprecated;
 pub(crate) mod input;
 
-use crate::actions::cpaste::PasteOverSelection;
-use crate::actions::delete::{DeleteCharForward, DeleteToEndOfLine, DeleteToFirstCharOfLine};
-use crate::actions::motion::{MoveHalfPageDown, MoveToFirstRow, MoveToLastRow};
-use crate::actions::search::StartSearch;
-#[cfg(feature = "system-editor")]
-use crate::actions::OpenSystemEditor;
-use crate::actions::{
-    Action, AppendCharToSearch, AppendNewline, Chainable, ChangeInnerBetween, ChangeInnerWord,
-    ChangeSelection, CopyLine, CopySelection, DeleteChar, DeleteLine, DeleteSelection, Execute,
-    FindFirst, FindNext, FindPrevious, InsertChar, InsertNewline, JoinLineWithLineBelow, LineBreak,
-    MoveBackward, MoveDown, MoveForward, MoveHalfPageUp, MoveToEndOfLine, MoveToFirst,
-    MoveToMatchinBracket, MoveToStartOfLine, MoveUp, MoveWordBackward, MoveWordForward,
-    MoveWordForwardToEndOfWord, Paste, Redo, RemoveChar, RemoveCharFromSearch, SelectCurrentSearch,
-    SelectInnerBetween, SelectInnerWord, SelectLine, StopSearch, SwitchMode, Undo,
-};
+use crate::actions::{Action, AppendCharToSearch, Execute, InsertChar};
+use crate::events::keybindings;
 use crate::events::KeyInput;
 use crate::{EditorMode, EditorState};
-use crossterm::event::KeyCode;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
@@ -48,23 +34,19 @@ impl KeyEventHandler {
     /// Creates a new `KeyEventHandler` with vim keybindings.
     #[must_use]
     pub fn vim_mode() -> Self {
-        let register: HashMap<KeyEventRegister, Action> = vim_keybindings();
-        Self {
-            lookup: Vec::new(),
-            register,
-            capture_on_insert: false,
-        }
+        Self::new(keybindings::vim::key_bindings(), false)
     }
 
-    // Creates a new `KeyEventHandler` with emacs keybindings.
+    /// Creates a new `KeyEventHandler` with emacs keybindings.
     #[must_use]
     pub fn emacs_mode() -> Self {
-        let register: HashMap<KeyEventRegister, Action> = emacs_keybindings();
-        Self {
-            lookup: Vec::new(),
-            register,
-            capture_on_insert: true,
-        }
+        Self::new(keybindings::emacs::key_bindings(), true)
+    }
+
+    /// Creates a new `KeyEventHandler` with MS Word-style keybindings.
+    #[must_use]
+    pub fn ms_word_mode() -> Self {
+        Self::new(keybindings::ms_word::key_bindings(), true)
     }
 
     /// Insert a new callback to the registry
@@ -96,11 +78,61 @@ impl KeyEventHandler {
     /// is appended to the lookup vector.
     /// If there is an exact match or if none of the keys in the registry
     /// starts with the current sequence, the lookup sequence is reset.
+    /// Supports numeric prefixes (e.g. 26w, d15w, c100w) by stripping
+    /// a contiguous digit sequence and looking up the base binding.
     #[must_use]
     fn get(&mut self, c: KeyInput, mode: EditorMode) -> Option<Action> {
         self.lookup.push(c);
-        let key = KeyEventRegister::new(self.lookup.clone(), mode);
+        let lookup = &self.lookup;
+        let mode = mode;
 
+        // Try to parse as (prefix)(digits)(suffix) for countable bindings
+        for i in 0..lookup.len() {
+            for j in (i + 1..lookup.len()).rev() {
+                let digit_slice = &lookup[i..j];
+                if digit_slice.is_empty() || !digit_slice.iter().all(key_input_is_digit) {
+                    continue;
+                }
+                let suffix = &lookup[j..];
+                if suffix.is_empty() {
+                    continue;
+                }
+                // Don't treat a suffix that starts with a digit as the command (e.g. "10" should
+                // wait for "w"/"j" rather than matching "0" = start of line).
+                if suffix.first().map_or(false, key_input_is_digit) {
+                    continue;
+                }
+                let base_keys: Vec<KeyInput> = lookup[0..i]
+                    .iter()
+                    .chain(suffix.iter())
+                    .cloned()
+                    .collect();
+                let base_key = KeyEventRegister::new(base_keys, mode);
+                if let Some(action) = self.register.get(&base_key) {
+                    let n = parse_digit_prefix(digit_slice);
+                    if n > 0 {
+                        self.lookup.clear();
+                        return Some(action.clone().with_count(n));
+                    }
+                }
+            }
+        }
+
+        // Incomplete count: all digits, or [d]/[c] followed by only digits — wait for more input
+        if lookup.iter().all(key_input_is_digit) {
+            return None;
+        }
+        if lookup.len() >= 2 {
+            let (prefix, rest) = lookup.split_at(1);
+            if (prefix[0].key == input::KeyCode::Char('d')
+                || prefix[0].key == input::KeyCode::Char('c'))
+                && rest.iter().all(key_input_is_digit)
+            {
+                return None;
+            }
+        }
+
+        let key = KeyEventRegister::new(self.lookup.clone(), mode);
         match self
             .register
             .keys()
@@ -120,751 +152,24 @@ impl KeyEventHandler {
     }
 }
 
-#[allow(clippy::too_many_lines)]
-fn vim_keybindings() -> HashMap<KeyEventRegister, Action> {
-    #[allow(unused_mut)]
-    let mut map = HashMap::from([
-        // Go into normal mode
-        (
-            KeyEventRegister::i(vec![KeyInput::new(KeyCode::Esc)]),
-            SwitchMode(EditorMode::Normal).into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new(KeyCode::Esc)]),
-            SwitchMode(EditorMode::Normal).into(),
-        ),
-        // Go into insert mode
-        (
-            KeyEventRegister::n(vec![KeyInput::new('i')]),
-            SwitchMode(EditorMode::Insert).into(),
-        ),
-        // Go into visual mode
-        (
-            KeyEventRegister::n(vec![KeyInput::new('v')]),
-            SwitchMode(EditorMode::Visual).into(),
-        ),
-        // Goes into search mode and starts of a new search.
-        (
-            KeyEventRegister::n(vec![KeyInput::new('/')]),
-            StartSearch.chain(SwitchMode(EditorMode::Search)).into(),
-        ),
-        // Trigger initial search
-        (
-            KeyEventRegister::s(vec![KeyInput::new(KeyCode::Enter)]),
-            FindFirst.chain(SwitchMode(EditorMode::Normal)).into(),
-        ),
-        // Find next
-        (
-            KeyEventRegister::n(vec![KeyInput::new('n')]),
-            FindNext.into(),
-        ),
-        // Find previous
-        (
-            KeyEventRegister::n(vec![KeyInput::shift('N')]),
-            FindPrevious.into(),
-        ),
-        // Clear search
-        (
-            KeyEventRegister::s(vec![KeyInput::new(KeyCode::Esc)]),
-            StopSearch.chain(SwitchMode(EditorMode::Normal)).into(),
-        ),
-        // Delete last character from search
-        (
-            KeyEventRegister::s(vec![KeyInput::new(KeyCode::Backspace)]),
-            RemoveCharFromSearch.into(),
-        ),
-        // Go into insert mode and move one char forward
-        (
-            KeyEventRegister::n(vec![KeyInput::new('a')]),
-            SwitchMode(EditorMode::Insert).chain(MoveForward(1)).into(),
-        ),
-        // Move cursor forward
-        (
-            KeyEventRegister::n(vec![KeyInput::new('l')]),
-            MoveForward(1).into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new('l')]),
-            MoveForward(1).into(),
-        ),
-        (
-            KeyEventRegister::n(vec![KeyInput::new(KeyCode::Right)]),
-            MoveForward(1).into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new(KeyCode::Right)]),
-            MoveForward(1).into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::new(KeyCode::Right)]),
-            MoveForward(1).into(),
-        ),
-        // Move cursor backward
-        (
-            KeyEventRegister::n(vec![KeyInput::new('h')]),
-            MoveBackward(1).into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new('h')]),
-            MoveBackward(1).into(),
-        ),
-        (
-            KeyEventRegister::n(vec![KeyInput::new(KeyCode::Left)]),
-            MoveBackward(1).into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new(KeyCode::Left)]),
-            MoveBackward(1).into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::new(KeyCode::Left)]),
-            MoveBackward(1).into(),
-        ),
-        // Move cursor up
-        (
-            KeyEventRegister::n(vec![KeyInput::new('k')]),
-            MoveUp(1).into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new('k')]),
-            MoveUp(1).into(),
-        ),
-        (
-            KeyEventRegister::n(vec![KeyInput::new(KeyCode::Up)]),
-            MoveUp(1).into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new(KeyCode::Up)]),
-            MoveUp(1).into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::new(KeyCode::Up)]),
-            MoveUp(1).into(),
-        ),
-        // Move cursor down
-        (
-            KeyEventRegister::n(vec![KeyInput::new('j')]),
-            MoveDown(1).into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new('j')]),
-            MoveDown(1).into(),
-        ),
-        (
-            KeyEventRegister::n(vec![KeyInput::new(KeyCode::Down)]),
-            MoveDown(1).into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new(KeyCode::Down)]),
-            MoveDown(1).into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::new(KeyCode::Down)]),
-            MoveDown(1).into(),
-        ),
-        // Move one word forward/backward
-        (
-            KeyEventRegister::n(vec![KeyInput::new('w')]),
-            MoveWordForward(1).into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new('w')]),
-            MoveWordForward(1).into(),
-        ),
-        (
-            KeyEventRegister::n(vec![KeyInput::new('e')]),
-            MoveWordForwardToEndOfWord(1).into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new('e')]),
-            MoveWordForwardToEndOfWord(1).into(),
-        ),
-        (
-            KeyEventRegister::n(vec![KeyInput::new('b')]),
-            MoveWordBackward(1).into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new('b')]),
-            MoveWordBackward(1).into(),
-        ),
-        // Move cursor to start/first/last position
-        (
-            KeyEventRegister::n(vec![KeyInput::new('0')]),
-            MoveToStartOfLine().into(),
-        ),
-        (
-            KeyEventRegister::n(vec![KeyInput::new('_')]),
-            MoveToFirst().into(),
-        ),
-        (
-            KeyEventRegister::n(vec![KeyInput::new('$')]),
-            MoveToEndOfLine().into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new('0')]),
-            MoveToStartOfLine().into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new('_')]),
-            MoveToFirst().into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new('$')]),
-            MoveToEndOfLine().into(),
-        ),
-        (
-            KeyEventRegister::n(vec![KeyInput::ctrl('d')]),
-            MoveHalfPageDown().into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::ctrl('d')]),
-            MoveHalfPageDown().into(),
-        ),
-        (
-            KeyEventRegister::n(vec![KeyInput::ctrl('u')]),
-            MoveHalfPageUp().into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::ctrl('u')]),
-            MoveHalfPageUp().into(),
-        ),
-        // `Home` and `End` go to first/last position in a line
-        (
-            KeyEventRegister::i(vec![KeyInput::new(KeyCode::Home)]),
-            MoveToStartOfLine().into(),
-        ),
-        (
-            KeyEventRegister::n(vec![KeyInput::new(KeyCode::Home)]),
-            MoveToStartOfLine().into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new(KeyCode::Home)]),
-            MoveToStartOfLine().into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::new(KeyCode::End)]),
-            MoveToEndOfLine().into(),
-        ),
-        (
-            KeyEventRegister::n(vec![KeyInput::new(KeyCode::End)]),
-            MoveToEndOfLine().into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new(KeyCode::End)]),
-            MoveToEndOfLine().into(),
-        ),
-        // `Ctrl+u` deltes from cursor to first non-whitespace character in insert mode
-        (
-            KeyEventRegister::i(vec![KeyInput::ctrl('u')]),
-            DeleteToFirstCharOfLine.into(),
-        ),
-        // Move cursor to start/first/last position and enter insert mode
-        (
-            KeyEventRegister::n(vec![KeyInput::shift('I')]),
-            SwitchMode(EditorMode::Insert).chain(MoveToFirst()).into(),
-        ),
-        (
-            KeyEventRegister::n(vec![KeyInput::shift('A')]),
-            SwitchMode(EditorMode::Insert)
-                .chain(MoveToEndOfLine())
-                .chain(MoveForward(1))
-                .into(),
-        ),
-        // Move cursor to start/last row in the buffer
-        (
-            KeyEventRegister::n(vec![KeyInput::new('g'), KeyInput::new('g')]),
-            MoveToFirstRow().into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new('g'), KeyInput::new('g')]),
-            MoveToFirstRow().into(),
-        ),
-        (
-            KeyEventRegister::n(vec![KeyInput::shift('G')]),
-            MoveToLastRow().into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::shift('G')]),
-            MoveToLastRow().into(),
-        ),
-        // Move cursor to the next opening/closing bracket.
-        (
-            KeyEventRegister::n(vec![KeyInput::new('%')]),
-            MoveToMatchinBracket().into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new('%')]),
-            MoveToMatchinBracket().into(),
-        ),
-        // Append/insert new line and switch into insert mode
-        (
-            KeyEventRegister::n(vec![KeyInput::new('o')]),
-            SwitchMode(EditorMode::Insert)
-                .chain(AppendNewline(1))
-                .into(),
-        ),
-        (
-            KeyEventRegister::n(vec![KeyInput::shift('O')]),
-            SwitchMode(EditorMode::Insert)
-                .chain(InsertNewline(1))
-                .into(),
-        ),
-        // Insert a line break
-        (
-            KeyEventRegister::i(vec![KeyInput::new(KeyCode::Enter)]),
-            LineBreak(1).into(),
-        ),
-        // Remove the current character
-        (
-            KeyEventRegister::n(vec![KeyInput::new('x')]),
-            RemoveChar(1).into(),
-        ),
-        (
-            KeyEventRegister::n(vec![KeyInput::new(KeyCode::Delete)]),
-            RemoveChar(1).into(),
-        ),
-        // Delete the previous character
-        (
-            KeyEventRegister::i(vec![KeyInput::new(KeyCode::Backspace)]),
-            DeleteChar(1).into(),
-        ),
-        // Delete the next character
-        (
-            KeyEventRegister::i(vec![KeyInput::new(KeyCode::Delete)]),
-            DeleteCharForward(1).into(),
-        ),
-        // Delete the current line
-        (
-            KeyEventRegister::n(vec![KeyInput::new('d'), KeyInput::new('d')]),
-            DeleteLine(1).into(),
-        ),
-        // Delete from the cursor to the end of the line
-        (
-            KeyEventRegister::n(vec![KeyInput::shift('D')]),
-            DeleteToEndOfLine.into(),
-        ),
-        // Delete the current selection
-        (
-            KeyEventRegister::v(vec![KeyInput::new('d')]),
-            DeleteSelection.chain(SwitchMode(EditorMode::Normal)).into(),
-        ),
-        // Join the current line with the line below
-        (
-            KeyEventRegister::n(vec![KeyInput::shift('J')]),
-            JoinLineWithLineBelow.into(),
-        ),
-        // Select inner word between delimiters
-        (
-            KeyEventRegister::v(vec![KeyInput::new('i'), KeyInput::new('w')]),
-            SelectInnerWord.into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new('i'), KeyInput::new('"')]),
-            SelectInnerBetween::new('"', '"').into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new('i'), KeyInput::new('\'')]),
-            SelectInnerBetween::new('\'', '\'').into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new('i'), KeyInput::new('(')]),
-            SelectInnerBetween::new('(', ')').into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new('i'), KeyInput::new(')')]),
-            SelectInnerBetween::new('(', ')').into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new('i'), KeyInput::new('{')]),
-            SelectInnerBetween::new('{', '}').into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new('i'), KeyInput::new('}')]),
-            SelectInnerBetween::new('{', '}').into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new('i'), KeyInput::new('[')]),
-            SelectInnerBetween::new('[', ']').into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new('i'), KeyInput::new(']')]),
-            SelectInnerBetween::new('[', ']').into(),
-        ),
-        // Delete inner word between delimiters
-        (
-            KeyEventRegister::n(vec![
-                KeyInput::new('d'),
-                KeyInput::new('i'),
-                KeyInput::new('w'),
-            ]),
-            ChangeInnerWord.into(),
-        ),
-        (
-            KeyEventRegister::n(vec![
-                KeyInput::new('d'),
-                KeyInput::new('i'),
-                KeyInput::new('"'),
-            ]),
-            ChangeInnerBetween::new('"', '"').into(),
-        ),
-        (
-            KeyEventRegister::n(vec![
-                KeyInput::new('d'),
-                KeyInput::new('i'),
-                KeyInput::new('\''),
-            ]),
-            ChangeInnerBetween::new('\'', '\'').into(),
-        ),
-        (
-            KeyEventRegister::n(vec![
-                KeyInput::new('d'),
-                KeyInput::new('i'),
-                KeyInput::new('('),
-            ]),
-            ChangeInnerBetween::new('(', ')').into(),
-        ),
-        (
-            KeyEventRegister::n(vec![
-                KeyInput::new('d'),
-                KeyInput::new('i'),
-                KeyInput::new(')'),
-            ]),
-            ChangeInnerBetween::new('(', ')').into(),
-        ),
-        (
-            KeyEventRegister::n(vec![
-                KeyInput::new('d'),
-                KeyInput::new('i'),
-                KeyInput::new('{'),
-            ]),
-            ChangeInnerBetween::new('{', '}').into(),
-        ),
-        (
-            KeyEventRegister::n(vec![
-                KeyInput::new('d'),
-                KeyInput::new('i'),
-                KeyInput::new('}'),
-            ]),
-            ChangeInnerBetween::new('{', '}').into(),
-        ),
-        (
-            KeyEventRegister::n(vec![
-                KeyInput::new('d'),
-                KeyInput::new('i'),
-                KeyInput::new('['),
-            ]),
-            ChangeInnerBetween::new('[', ']').into(),
-        ),
-        (
-            KeyEventRegister::n(vec![
-                KeyInput::new('d'),
-                KeyInput::new('i'),
-                KeyInput::new(']'),
-            ]),
-            ChangeInnerBetween::new('[', ']').into(),
-        ),
-        // Change inner word between delimiters
-        (
-            KeyEventRegister::n(vec![
-                KeyInput::new('c'),
-                KeyInput::new('i'),
-                KeyInput::new('w'),
-            ]),
-            SwitchMode(EditorMode::Insert).chain(ChangeInnerWord).into(),
-        ),
-        (
-            KeyEventRegister::n(vec![
-                KeyInput::new('c'),
-                KeyInput::new('i'),
-                KeyInput::new('"'),
-            ]),
-            SwitchMode(EditorMode::Insert)
-                .chain(ChangeInnerBetween::new('"', '"'))
-                .into(),
-        ),
-        (
-            KeyEventRegister::n(vec![
-                KeyInput::new('c'),
-                KeyInput::new('i'),
-                KeyInput::new('\''),
-            ]),
-            SwitchMode(EditorMode::Insert)
-                .chain(ChangeInnerBetween::new('\'', '\''))
-                .into(),
-        ),
-        (
-            KeyEventRegister::n(vec![
-                KeyInput::new('c'),
-                KeyInput::new('i'),
-                KeyInput::new('('),
-            ]),
-            SwitchMode(EditorMode::Insert)
-                .chain(ChangeInnerBetween::new('(', ')'))
-                .into(),
-        ),
-        (
-            KeyEventRegister::n(vec![
-                KeyInput::new('c'),
-                KeyInput::new('i'),
-                KeyInput::new(')'),
-            ]),
-            SwitchMode(EditorMode::Insert)
-                .chain(ChangeInnerBetween::new('(', ')'))
-                .into(),
-        ),
-        (
-            KeyEventRegister::n(vec![
-                KeyInput::new('c'),
-                KeyInput::new('i'),
-                KeyInput::new('{'),
-            ]),
-            SwitchMode(EditorMode::Insert)
-                .chain(ChangeInnerBetween::new('{', '}'))
-                .into(),
-        ),
-        (
-            KeyEventRegister::n(vec![
-                KeyInput::new('c'),
-                KeyInput::new('i'),
-                KeyInput::new('}'),
-            ]),
-            SwitchMode(EditorMode::Insert)
-                .chain(ChangeInnerBetween::new('{', '}'))
-                .into(),
-        ),
-        (
-            KeyEventRegister::n(vec![
-                KeyInput::new('c'),
-                KeyInput::new('i'),
-                KeyInput::new('['),
-            ]),
-            SwitchMode(EditorMode::Insert)
-                .chain(ChangeInnerBetween::new('[', ']'))
-                .into(),
-        ),
-        (
-            KeyEventRegister::n(vec![
-                KeyInput::new('c'),
-                KeyInput::new('i'),
-                KeyInput::new(']'),
-            ]),
-            SwitchMode(EditorMode::Insert)
-                .chain(ChangeInnerBetween::new('[', ']'))
-                .into(),
-        ),
-        // Change selection
-        (
-            KeyEventRegister::v(vec![KeyInput::new('c')]),
-            SwitchMode(EditorMode::Insert).chain(ChangeSelection).into(),
-        ),
-        (
-            KeyEventRegister::v(vec![KeyInput::new('x')]),
-            ChangeSelection.chain(SwitchMode(EditorMode::Normal)).into(),
-        ),
-        // Select  the line
-        (
-            KeyEventRegister::n(vec![KeyInput::shift('V')]),
-            SelectLine.into(),
-        ),
-        // Undo
-        (KeyEventRegister::n(vec![KeyInput::new('u')]), Undo.into()),
-        // Redo
-        (KeyEventRegister::n(vec![KeyInput::ctrl('r')]), Redo.into()),
-        // Copy
-        (
-            KeyEventRegister::v(vec![KeyInput::new('y')]),
-            CopySelection.chain(SwitchMode(EditorMode::Normal)).into(),
-        ),
-        (
-            KeyEventRegister::n(vec![KeyInput::new('y'), KeyInput::new('y')]),
-            CopyLine.into(),
-        ),
-        // Paste
-        (KeyEventRegister::n(vec![KeyInput::new('p')]), Paste.into()),
-        (
-            KeyEventRegister::v(vec![KeyInput::new('p')]),
-            PasteOverSelection
-                .chain(SwitchMode(EditorMode::Normal))
-                .into(),
-        ),
-    ]);
-
-    // Open system editor (Ctrl+e in normal mode)
-    #[cfg(feature = "system-editor")]
-    map.insert(
-        KeyEventRegister::n(vec![KeyInput::ctrl('e')]),
-        OpenSystemEditor.into(),
-    );
-
-    map
+fn key_input_is_digit(k: &KeyInput) -> bool {
+    matches!(k.key, input::KeyCode::Char(c) if c.is_ascii_digit())
 }
 
-#[allow(clippy::too_many_lines)]
-fn emacs_keybindings() -> HashMap<KeyEventRegister, Action> {
-    HashMap::from([
-        (
-            KeyEventRegister::i(vec![KeyInput::ctrl('s')]),
-            StartSearch.chain(SwitchMode(EditorMode::Search)).into(),
-        ),
-        (
-            KeyEventRegister::s(vec![KeyInput::ctrl('s')]),
-            FindNext.into(),
-        ),
-        (
-            KeyEventRegister::s(vec![KeyInput::ctrl('r')]),
-            FindPrevious.into(),
-        ),
-        (
-            KeyEventRegister::s(vec![KeyInput::new(KeyCode::Enter)]),
-            SelectCurrentSearch
-                .chain(SwitchMode(EditorMode::Insert))
-                .into(),
-        ),
-        (
-            KeyEventRegister::s(vec![KeyInput::ctrl('g')]),
-            StopSearch.chain(SwitchMode(EditorMode::Insert)).into(),
-        ),
-        (
-            KeyEventRegister::s(vec![KeyInput::new(KeyCode::Backspace)]),
-            RemoveCharFromSearch.into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::ctrl('f')]),
-            MoveForward(1).into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::new(KeyCode::Right)]),
-            MoveForward(1).into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::ctrl('b')]),
-            MoveBackward(1).into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::new(KeyCode::Left)]),
-            MoveBackward(1).into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::ctrl('p')]),
-            MoveUp(1).into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::new(KeyCode::Up)]),
-            MoveUp(1).into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::ctrl('n')]),
-            MoveDown(1).into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::new(KeyCode::Down)]),
-            MoveDown(1).into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::alt('f')]),
-            MoveWordForward(1).into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::alt('b')]),
-            MoveWordBackward(1).into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::ctrl('v')]),
-            MoveHalfPageDown().into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::alt('v')]),
-            MoveHalfPageUp().into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::alt('<')]),
-            MoveToFirstRow().into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::alt('>')]),
-            MoveToLastRow().into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::ctrl('a')]),
-            MoveToStartOfLine().into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::new(KeyCode::Home)]),
-            MoveToStartOfLine().into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::new(KeyCode::End)]),
-            MoveToEndOfLine().into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::ctrl('e')]),
-            MoveToEndOfLine().into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::alt('u')]),
-            DeleteToFirstCharOfLine.into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::ctrl('k')]),
-            DeleteToEndOfLine.into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::ctrl('o')]),
-            LineBreak(1)
-                .chain(MoveUp(1))
-                .chain(MoveToEndOfLine())
-                .into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::new(KeyCode::Enter)]),
-            LineBreak(1).into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::ctrl('j')]),
-            LineBreak(1).into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::new(KeyCode::Backspace)]),
-            DeleteChar(1).into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::ctrl('h')]),
-            DeleteChar(1).into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::new(KeyCode::Backspace)]),
-            DeleteCharForward(1).into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::ctrl('d')]),
-            DeleteCharForward(1).into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::alt('d')]),
-            SwitchMode(EditorMode::Visual)
-                .chain(MoveWordForwardToEndOfWord(1))
-                .chain(DeleteSelection)
-                .chain(SwitchMode(EditorMode::Insert))
-                .into(),
-        ),
-        (
-            KeyEventRegister::i(vec![KeyInput::alt(KeyCode::Backspace)]),
-            SwitchMode(EditorMode::Visual)
-                .chain(MoveWordBackward(1))
-                .chain(DeleteSelection)
-                .chain(SwitchMode(EditorMode::Insert))
-                .into(),
-        ),
-        (KeyEventRegister::i(vec![KeyInput::ctrl('u')]), Undo.into()),
-        (KeyEventRegister::i(vec![KeyInput::ctrl('r')]), Redo.into()),
-        (KeyEventRegister::i(vec![KeyInput::ctrl('y')]), Paste.into()),
-        #[cfg(feature = "system-editor")]
-        (
-            KeyEventRegister::i(vec![KeyInput::alt('e')]),
-            OpenSystemEditor.into(),
-        ),
-    ])
+fn parse_digit_prefix(digits: &[KeyInput]) -> usize {
+    let s: String = digits
+        .iter()
+        .filter_map(|k| {
+            if let input::KeyCode::Char(c) = k.key {
+                Some(c)
+            } else {
+                None
+            }
+        })
+        .collect();
+    s.parse::<usize>().unwrap_or(0).max(1)
 }
+
 
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub struct KeyInputSequence(Vec<KeyInput>);
@@ -999,6 +304,7 @@ impl KeyEventHandler {
 mod tests {
     #[allow(deprecated)]
     use super::deprecated::KeyEvent;
+    use super::input::KeyCode;
     use super::*;
 
     #[test]
@@ -1070,5 +376,27 @@ mod tests {
         }
 
         assert_eq!(state.lines.to_string(), String::from("Hello World!\nHi!"));
+    }
+
+    #[test]
+    fn test_vim_emacs_ms_word_mode_construct_and_handle_key() {
+        use crate::EditorState;
+
+        let mut state = EditorState::default();
+        state.mode = crate::EditorMode::Insert;
+
+        let mut vim = KeyEventHandler::vim_mode();
+        vim.on_event(KeyInput::new('a'), &mut state);
+        assert!(state.lines.to_string().len() >= 1);
+
+        let mut state2 = EditorState::default();
+        state2.mode = crate::EditorMode::Insert;
+        let mut emacs = KeyEventHandler::emacs_mode();
+        emacs.on_event(KeyInput::new(KeyCode::Right), &mut state2);
+
+        let mut state3 = EditorState::default();
+        state3.mode = crate::EditorMode::Insert;
+        let mut ms_word = KeyEventHandler::ms_word_mode();
+        ms_word.on_event(KeyInput::new(KeyCode::Down), &mut state3);
     }
 }

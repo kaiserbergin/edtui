@@ -90,8 +90,11 @@ pub enum KeyCode {
     Backspace,
     Delete,
     Tab,
+    BackTab,
     Home,
     End,
+    PageUp,
+    PageDown,
 }
 
 impl From<char> for KeyCode {
@@ -110,12 +113,15 @@ impl From<crossterm::event::KeyCode> for KeyCode {
             CTKeyCode::Backspace => KeyCode::Backspace,
             CTKeyCode::Delete => KeyCode::Delete,
             CTKeyCode::Tab => KeyCode::Tab,
+            CTKeyCode::BackTab => KeyCode::BackTab,
             CTKeyCode::Left => KeyCode::Left,
             CTKeyCode::Right => KeyCode::Right,
             CTKeyCode::Up => KeyCode::Up,
             CTKeyCode::Down => KeyCode::Down,
             CTKeyCode::Home => KeyCode::Home,
             CTKeyCode::End => KeyCode::End,
+            CTKeyCode::PageUp => KeyCode::PageUp,
+            CTKeyCode::PageDown => KeyCode::PageDown,
             _ => unimplemented!(),
         }
     }
@@ -153,6 +159,21 @@ impl Modifiers {
         alt: false,
         shift: true,
     };
+
+    #[must_use]
+    pub const fn has_control(&self) -> bool {
+        self.ctrl
+    }
+
+    #[must_use]
+    pub const fn has_alt(&self) -> bool {
+        self.alt
+    }
+
+    #[must_use]
+    pub const fn has_shift(&self) -> bool {
+        self.shift
+    }
 }
 
 impl From<crossterm::event::KeyModifiers> for Modifiers {

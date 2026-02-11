@@ -1,4 +1,6 @@
 mod key;
+pub(crate) mod keybindings;
+pub mod ms_word_handler;
 #[cfg(feature = "mouse-support")]
 pub(crate) mod mouse;
 pub(crate) mod paste;
@@ -6,6 +8,7 @@ pub(crate) mod paste;
 #[allow(deprecated)]
 pub use key::deprecated::KeyEvent;
 pub use key::{input::KeyInput, KeyEventHandler, KeyEventRegister, KeyInputSequence};
+pub use ms_word_handler::MsWordEditorEventHandler;
 
 #[cfg(feature = "mouse-support")]
 pub use mouse::{MouseEvent, MouseEventHandler};
@@ -45,6 +48,14 @@ impl EditorEventHandler {
     pub fn emacs_mode() -> Self {
         Self {
             key_handler: KeyEventHandler::emacs_mode(),
+        }
+    }
+
+    /// Creates a new `EditorEvent` handler with MS Word-style keybindings.
+    #[must_use]
+    pub fn ms_word_mode() -> Self {
+        Self {
+            key_handler: KeyEventHandler::ms_word_mode(),
         }
     }
 

@@ -1,6 +1,6 @@
 use jagged::index::RowIndex;
 
-use super::{delete::delete_selection, motion::CharacterClass, Execute};
+use super::{delete::delete_selection, motion::CharacterClass, motion::MoveWordForward, Execute};
 use crate::{
     clipboard::ClipboardTrait, state::selection::Selection, EditorMode, EditorState, Index2, Lines,
 };
@@ -73,6 +73,62 @@ impl Execute for SelectInnerWord {
         ) {
             state.selection = Some(selection);
         }
+    }
+}
+
+/// Selects the word under the cursor and the whitespace after it (vim-style "aw").
+/// Unlike [SelectInnerWord], the selection includes trailing whitespace only, not leading.
+#[derive(Clone, Debug, Copy)]
+pub struct SelectAroundWord;
+
+impl Execute for SelectAroundWord {
+    fn execute(&mut self, state: &mut EditorState) {
+        let row_index = state.cursor.row;
+        let Some(line) = state.lines.get(RowIndex::new(row_index)) else {
+            return;
+        };
+
+        let Some(len_col) = state.lines.len_col(state.cursor.row) else {
+            return;
+        };
+
+        let max_col_index = len_col.saturating_sub(1);
+
+        let start_col = state.cursor.col;
+        let start_char_class = CharacterClass::from(line.get(start_col));
+
+        let opening_predicate =
+            |(ch, _): (&char, usize)| CharacterClass::from(ch) != start_char_class.clone();
+        let closing_predicate =
+            |(ch, _): (&char, usize)| CharacterClass::from(ch) != start_char_class.clone();
+
+        let Some(selection) = select_between(
+            &state.lines,
+            state.cursor,
+            opening_predicate,
+            closing_predicate,
+            |(_, col)| col == 0,
+            |(_, col)| col == max_col_index,
+        ) else {
+            return;
+        };
+
+        // Extend selection to include trailing whitespace only (vim "a word" = word + space after)
+        let mut end_col = selection.end.col;
+        while end_col < max_col_index {
+            if let Some(ch) = line.get(end_col + 1) {
+                if CharacterClass::from(ch) == CharacterClass::Whitespace {
+                    end_col += 1;
+                    continue;
+                }
+            }
+            break;
+        }
+
+        state.selection = Some(Selection::new(
+            Index2::new(row_index, selection.start.col),
+            Index2::new(row_index, end_col),
+        ));
     }
 }
 
@@ -172,6 +228,53 @@ impl Execute for ChangeInnerBetween {
             let deleted = delete_selection(state, &selection);
             state.clip.set_text(deleted.into());
         }
+    }
+}
+
+#[derive(Clone, Debug, Copy)]
+pub struct ChangeAroundWord;
+
+impl Execute for ChangeAroundWord {
+    fn execute(&mut self, state: &mut EditorState) {
+        SelectAroundWord.execute(state);
+        if let Some(selection) = state.selection.take() {
+            state.capture();
+            let deleted = delete_selection(state, &selection);
+            state.clip.set_text(deleted.into());
+        }
+    }
+}
+
+/// Changes from cursor to end of word (vim-style "cw").
+/// Deletes from cursor position to the start of the next word (current word remainder + trailing space).
+#[derive(Clone, Debug, Copy)]
+pub struct ChangeWord(pub usize);
+
+impl Execute for ChangeWord {
+    fn execute(&mut self, state: &mut EditorState) {
+        if state.lines.is_empty() {
+            return;
+        }
+        state.clamp_column();
+        let start = state.cursor;
+        MoveWordForward(self.0).execute(state);
+        let end = state.cursor;
+        // End of deleted range is the position before the new cursor (cursor is at first char we keep).
+        let end_pos = if end.col > 0 {
+            Index2::new(end.row, end.col.saturating_sub(1))
+        } else if end.row > start.row {
+            let prev_row = end.row - 1;
+            Index2::new(prev_row, state.lines.last_col_index(prev_row))
+        } else {
+            return; // did not move forward, nothing to change
+        };
+        if end_pos.row < start.row || (end_pos.row == start.row && end_pos.col < start.col) {
+            return;
+        }
+        let selection = Selection::new(start, end_pos);
+        state.capture();
+        let deleted = delete_selection(state, &selection);
+        state.clip.set_text(deleted.into());
     }
 }
 
@@ -465,5 +568,119 @@ mod tests {
 
         let want = Selection::new(Index2::new(0, 0), Index2::new(0, 4));
         assert_eq!(state.selection.unwrap(), want);
+    }
+
+    #[test]
+    fn test_select_around_word_selects_word_plus_trailing_space() {
+        let lines = Lines::from("Hello World");
+        let mut state = EditorState::new(lines);
+        state.cursor = Index2::new(0, 1);
+
+        SelectAroundWord.execute(&mut state);
+
+        // "Hello " (word + one space after)
+        let want = Selection::new(Index2::new(0, 0), Index2::new(0, 5));
+        assert_eq!(state.selection.unwrap(), want);
+    }
+
+    #[test]
+    fn test_select_around_word_trailing_whitespace_only() {
+        let lines = Lines::from("  foo  bar");
+        let mut state = EditorState::new(lines);
+        state.cursor = Index2::new(0, 4); // on 'f' of "foo"
+
+        SelectAroundWord.execute(&mut state);
+
+        // "foo  " (word + spaces after, no leading spaces - vim "aw")
+        let want = Selection::new(Index2::new(0, 2), Index2::new(0, 6));
+        assert_eq!(state.selection.unwrap(), want);
+    }
+
+    #[test]
+    fn test_select_around_word_second_word() {
+        let lines = Lines::from("Hello World");
+        let mut state = EditorState::new(lines);
+        state.cursor = Index2::new(0, 7); // on 'o' of "World"
+
+        SelectAroundWord.execute(&mut state);
+
+        // "World" only (last word, no trailing space; vim "aw" does not add leading space)
+        let want = Selection::new(Index2::new(0, 6), Index2::new(0, 10));
+        assert_eq!(state.selection.unwrap(), want);
+    }
+
+    #[test]
+    fn test_select_around_word_single_word_line() {
+        let lines = Lines::from("Only");
+        let mut state = EditorState::new(lines);
+        state.cursor = Index2::new(0, 2);
+
+        SelectAroundWord.execute(&mut state);
+
+        // Entire word, no extra space
+        let want = Selection::new(Index2::new(0, 0), Index2::new(0, 3));
+        assert_eq!(state.selection.unwrap(), want);
+    }
+
+    #[test]
+    fn test_select_around_word_word_plus_trailing_spaces() {
+        let lines = Lines::from("  gap  ");
+        let mut state = EditorState::new(lines);
+        state.cursor = Index2::new(0, 3); // on 'a' of "gap"
+
+        SelectAroundWord.execute(&mut state);
+
+        // "gap  " (word + trailing spaces only)
+        let want = Selection::new(Index2::new(0, 2), Index2::new(0, 6));
+        assert_eq!(state.selection.unwrap(), want);
+    }
+
+    #[test]
+    fn test_change_around_word() {
+        let lines = Lines::from("Hello World");
+        let mut state = EditorState::new(lines);
+        state.cursor = Index2::new(0, 1); // on 'e' of "Hello"
+
+        ChangeAroundWord.execute(&mut state);
+
+        // Selection is consumed; "Hello " was deleted and put in clipboard
+        assert!(state.selection.is_none());
+        assert_eq!(state.clip.get_text(), "Hello ");
+        // Line should now be "World"
+        assert_eq!(state.lines.to_string(), "World");
+    }
+
+    #[test]
+    fn test_change_word() {
+        use crate::clipboard::InternalClipboard;
+
+        let lines = Lines::from("Hello World");
+        let mut state = EditorState::new(lines);
+        state.set_clipboard(InternalClipboard::default());
+        state.cursor = Index2::new(0, 1); // on 'e' of "Hello"
+
+        ChangeWord(1).execute(&mut state);
+
+        // "ello " deleted (from cursor to start of next word), clipboard has it, cursor at start
+        assert_eq!(state.clip.get_text(), "ello ");
+        assert_eq!(state.cursor, Index2::new(0, 1));
+        assert_eq!(state.lines.to_string(), "HWorld");
+    }
+
+    #[test]
+    fn test_change_word_from_word_start() {
+        use crate::clipboard::InternalClipboard;
+
+        let lines = Lines::from("Hello World");
+        let mut state = EditorState::new(lines);
+        state.set_clipboard(InternalClipboard::default());
+        state.cursor = Index2::new(0, 0); // on 'H' of "Hello"
+
+        ChangeWord(1).execute(&mut state);
+
+        // "Hello " deleted (vim cw), cursor at (0, 0)
+        assert_eq!(state.clip.get_text(), "Hello ");
+        assert_eq!(state.cursor, Index2::new(0, 0));
+        assert_eq!(state.lines.to_string(), "World");
     }
 }
