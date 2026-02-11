@@ -61,7 +61,7 @@
 //! ## Features
 //! - Custom theming.
 //! - Mouse events.
-//! - Vim and Emacs keybindings.
+//! - Vim, Emacs, MS Word, and WordStar keybindings.
 //! - Copy paste using the systems clipboard.
 //! - Line wrapping.
 //! - Syntax highlighting.
@@ -177,7 +177,7 @@
 //! falling back to a platform-specific default if neither is set.
 //!
 //! ## Keybindings
-//! `EdTUI` offers Vim keybindings by default and Emacs keybindings as an alternative.
+//! `EdTUI` offers Vim keybindings by default, with Emacs, MS Word, and WordStar as alternatives.
 //!
 //! ### Vim Mode (default)
 //!
@@ -278,6 +278,150 @@
 //! | `Ctrl+s`        | Search mode: Go to next match                            |
 //! | `Ctrl+r`        | Search mode: Go to previous match                        |
 //! | `Enter`         | Search mode: Select current match                        |
+//!
+//! ### MS Word Mode
+//!
+//! MS Word Mode provides familiar Microsoft Word-style keybindings with Windows-style
+//! selection behavior. Use `MsWordEditorEventHandler` for the full experience, which
+//! adds Shift+movement selection and automatic selection replacement on typing.
+//!
+//! ```ignore
+//! use edtui::{EditorState, MsWordEditorEventHandler, Lines};
+//!
+//! let mut state = EditorState::new(Lines::from("Hello World"));
+//! let mut event_handler = MsWordEditorEventHandler::new();
+//! event_handler.on_key_event(key_event, &mut state);
+//! ```
+//!
+//! #### Navigation
+//!
+//! | Keybinding              | Description                                    |
+//! |-------------------------|------------------------------------------------|
+//! | `→`                     | Move forward one character                     |
+//! | `←`                     | Move backward one character                    |
+//! | `↑`                     | Move up one line                               |
+//! | `↓`                     | Move down one line                             |
+//! | `Ctrl+→`                | Move forward one word                          |
+//! | `Ctrl+←`                | Move backward one word                         |
+//! | `Ctrl+↑`                | Scroll up half page                            |
+//! | `Ctrl+↓`                | Scroll down half page                          |
+//! | `Home`                  | Move to start of line                          |
+//! | `End`                   | Move to end of line                            |
+//! | `Ctrl+Alt+↑`            | Move to beginning of file                      |
+//! | `Ctrl+Alt+↓`            | Move to end of file                            |
+//! | `Ctrl+Alt+←`            | Move to start of line                          |
+//! | `Ctrl+Alt+→`            | Move to end of line                            |
+//!
+//! #### Selection (via `MsWordEditorEventHandler`)
+//!
+//! | Keybinding              | Description                                    |
+//! |-------------------------|------------------------------------------------|
+//! | `Shift+→`               | Extend selection forward                       |
+//! | `Shift+←`               | Extend selection backward                      |
+//! | `Shift+↑`               | Extend selection up                            |
+//! | `Shift+↓`               | Extend selection down                          |
+//! | `Shift+Ctrl+→`          | Extend selection forward by word               |
+//! | `Shift+Ctrl+←`          | Extend selection backward by word              |
+//! | `Shift+Ctrl+↑`          | Extend selection up half page                  |
+//! | `Shift+Ctrl+↓`          | Extend selection down half page                |
+//! | `Shift+Ctrl+Alt+↑`      | Extend selection to beginning of file          |
+//! | `Shift+Ctrl+Alt+↓`      | Extend selection to end of file                |
+//! | `Shift+Ctrl+Alt+←`      | Extend selection to start of line              |
+//! | `Shift+Ctrl+Alt+→`      | Extend selection to end of line                |
+//! | `Ctrl+C`                | Copy selection                                 |
+//! | `Ctrl+X`                | Cut selection                                  |
+//! | `Ctrl+V`                | Paste over selection                           |
+//!
+//! #### Editing
+//!
+//! | Keybinding              | Description                                    |
+//! |-------------------------|------------------------------------------------|
+//! | `Enter`                 | Insert line break                              |
+//! | `Backspace`             | Delete previous character                      |
+//! | `Delete`                | Delete character forward                       |
+//! | `Ctrl+Backspace`        | Delete word backward                           |
+//! | `Ctrl+Delete`           | Delete word forward                            |
+//! | `Ctrl+Alt+Backspace`    | Delete to start of line                        |
+//! | `Ctrl+Alt+Delete`       | Delete to end of line                          |
+//! | `Ctrl+Z`                | Undo                                           |
+//! | `Ctrl+Y`                | Redo                                           |
+//! | `Ctrl+V`                | Paste                                          |
+//! | `Ctrl+F`                | Search                                         |
+//!
+//! #### Search Mode
+//!
+//! | Keybinding              | Description                                    |
+//! |-------------------------|------------------------------------------------|
+//! | `Enter`                 | Select current match                           |
+//! | `→`                     | Go to next match                               |
+//! | `←`                     | Go to previous match                           |
+//! | `Esc`                   | Cancel search                                  |
+//! | `Backspace`             | Remove character from search                   |
+//!
+//! ### WordStar Mode
+//!
+//! WordStar Mode was added to provide classic WordStar-style navigation and editing.
+//!
+//! ```ignore
+//! use edtui::{EditorState, EditorEventHandler, Lines};
+//!
+//! let mut state = EditorState::new(Lines::from("Hello World"));
+//! let mut event_handler = EditorEventHandler::wordstar_mode();
+//! event_handler.on_key_event(key_event, &mut state);
+//! ```
+//!
+//! #### Essential Navigation (The Diamond)
+//!
+//! | Keybinding      | Description                                              |
+//! |-----------------|----------------------------------------------------------|
+//! | `Ctrl+S`        | Move left one character                                  |
+//! | `Ctrl+D`        | Move right one character                                 |
+//! | `Ctrl+E`        | Move up one line                                         |
+//! | `Ctrl+X`        | Move down one line                                       |
+//! | `Ctrl+A`        | Move left one word                                       |
+//! | `Ctrl+F`        | Move right one word                                      |
+//! | `Ctrl+R`        | Scroll up a page                                         |
+//! | `Ctrl+C`        | Scroll down a page                                       |
+//!
+//! #### Quick Menu (Ctrl+Q prefix)
+//!
+//! | Keybinding         | Description                                           |
+//! |--------------------|-------------------------------------------------------|
+//! | `Ctrl+Q, Ctrl+S`   | Move to start of line                                 |
+//! | `Ctrl+Q, Ctrl+D`   | Move to end of line                                   |
+//! | `Ctrl+Q, Ctrl+E`   | Move to top of screen                                 |
+//! | `Ctrl+Q, Ctrl+X`   | Move to bottom of screen                              |
+//! | `Ctrl+Q, Ctrl+R`   | Move to beginning of file                             |
+//! | `Ctrl+Q, Ctrl+C`   | Move to end of file                                   |
+//! | `Ctrl+Q, Ctrl+Y`   | Delete to end of line                                 |
+//! | `Ctrl+Q, Ctrl+F`   | Search                                                |
+//!
+//! #### Block Operations (Ctrl+K prefix)
+//!
+//! | Keybinding         | Description                                           |
+//! |--------------------|-------------------------------------------------------|
+//! | `Ctrl+K, Ctrl+B`   | Mark beginning of block (enter Visual mode)           |
+//! | `Ctrl+K, Ctrl+K`   | Copy block (in Visual mode)                           |
+//! | `Ctrl+K, Ctrl+C`   | Copy block (in Visual mode)                           |
+//! | `Ctrl+K, Ctrl+V`   | Paste block                                           |
+//! | `Ctrl+K, Ctrl+Y`   | Delete block (in Visual mode)                         |
+//!
+//! #### Editing Commands
+//!
+//! | Keybinding      | Description                                              |
+//! |-----------------|----------------------------------------------------------|
+//! | `Ctrl+Y`        | Delete entire line                                       |
+//! | `Ctrl+T`        | Delete word to the right                                 |
+//! | `Ctrl+H`        | Backspace (delete character backward)                    |
+//! | `Ctrl+G`        | Delete character forward                                 |
+//! | `Ctrl+U`        | Undo                                                     |
+//! | `Enter`         | Insert line break                                        |
+//! | `Backspace`     | Delete previous character                                |
+//! | `Delete`        | Delete character forward                                 |
+//! | `Arrows`        | Navigation                                               |
+//! | `Home`          | Move to start of line                                    |
+//! | `End`           | Move to end of line                                      |
+//! | `Esc`           | Cancel selection (in Visual mode)                        |
 //!
 //! ### Roadmap
 //! - [ ] Support termwiz and termion

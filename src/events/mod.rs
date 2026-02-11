@@ -59,6 +59,14 @@ impl EditorEventHandler {
         }
     }
 
+    /// Creates a new `EditorEvent` handler with WordStar-style keybindings.
+    #[must_use]
+    pub fn wordstar_mode() -> Self {
+        Self {
+            key_handler: KeyEventHandler::wordstar_mode(),
+        }
+    }
+
     /// Handles key and mouse events.
     pub fn on_event<T>(&mut self, event: T, state: &mut EditorState)
     where

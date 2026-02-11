@@ -49,6 +49,12 @@ impl KeyEventHandler {
         Self::new(keybindings::ms_word::key_bindings(), true)
     }
 
+    /// Creates a new `KeyEventHandler` with WordStar-style keybindings.
+    #[must_use]
+    pub fn wordstar_mode() -> Self {
+        Self::new(keybindings::wordstar::key_bindings(), true)
+    }
+
     /// Insert a new callback to the registry
     pub fn insert<T>(&mut self, key: KeyEventRegister, action: T)
     where
@@ -379,7 +385,7 @@ mod tests {
     }
 
     #[test]
-    fn test_vim_emacs_ms_word_mode_construct_and_handle_key() {
+    fn test_vim_emacs_ms_word_wordstar_mode_construct_and_handle_key() {
         use crate::EditorState;
 
         let mut state = EditorState::default();
@@ -398,5 +404,10 @@ mod tests {
         state3.mode = crate::EditorMode::Insert;
         let mut ms_word = KeyEventHandler::ms_word_mode();
         ms_word.on_event(KeyInput::new(KeyCode::Down), &mut state3);
+
+        let mut state4 = EditorState::default();
+        state4.mode = crate::EditorMode::Insert;
+        let mut wordstar = KeyEventHandler::wordstar_mode();
+        wordstar.on_event(KeyInput::new(KeyCode::Right), &mut state4);
     }
 }
