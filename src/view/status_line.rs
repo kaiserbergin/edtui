@@ -24,6 +24,8 @@ pub struct EditorStatusLine {
     alignment: HorizontalAlignment,
     /// Whether to show the mode text (e.g. Normal/Insert/Visual).
     show_mode: bool,
+    /// When true, the status line is only shown in search mode (one row with search only).
+    show_only_in_search_mode: bool,
 }
 
 impl Default for EditorStatusLine {
@@ -41,6 +43,7 @@ impl Default for EditorStatusLine {
             style_line: Style::default().fg(WHITE).bg(DARK_GRAY),
             alignment: HorizontalAlignment::Left,
             show_mode: true,
+            show_only_in_search_mode: false,
         }
     }
 }
@@ -148,6 +151,20 @@ impl EditorStatusLine {
     pub fn show_mode(mut self, show: bool) -> Self {
         self.show_mode = show;
         self
+    }
+
+    /// When true, the status line row is only reserved and shown when the editor is in search mode.
+    /// Use with `show_mode(false)` to show only the search pattern line (e.g. `/pattern`) in the editor pane.
+    #[must_use]
+    pub fn show_only_in_search_mode(mut self, show: bool) -> Self {
+        self.show_only_in_search_mode = show;
+        self
+    }
+
+    /// Returns whether the status line is only shown in search mode.
+    #[must_use]
+    pub(crate) fn is_show_only_in_search_mode(&self) -> bool {
+        self.show_only_in_search_mode
     }
 }
 

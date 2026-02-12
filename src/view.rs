@@ -202,10 +202,17 @@ impl Widget for EditorView<'_, '_> {
             None => area,
         };
 
-        // Split into main section and status line
+        // Split into main section and status line (status row only when search mode if show_only_in_search_mode)
+        let status_line_len = self.theme.status_line.as_ref().map_or(0, |s| {
+            if s.is_show_only_in_search_mode() {
+                u16::from(self.state.mode == EditorMode::Search)
+            } else {
+                1
+            }
+        });
         let [main, status] = Layout::vertical([
             Constraint::Min(0),
-            Constraint::Length(u16::from(self.theme.status_line.is_some())),
+            Constraint::Length(status_line_len),
         ])
         .areas(area);
 
@@ -376,15 +383,17 @@ impl Widget for EditorView<'_, '_> {
         // Required to handle scrolling.
         self.state.view.update_num_rows(num_rendered_rows);
 
-        // Render the status line.
-        if let Some(s) = self.theme.status_line {
-            s.mode(self.state.mode.name())
-                .search(if self.state.mode == EditorMode::Search {
-                    Some(self.state.search_pattern())
-                } else {
-                    None
-                })
-                .render(status, buf);
+        // Render the status line (only when it has height, e.g. when in search mode for search-only line).
+        if status.height > 0 {
+            if let Some(s) = self.theme.status_line {
+                s.mode(self.state.mode.name())
+                    .search(if self.state.mode == EditorMode::Search {
+                        Some(self.state.search_pattern())
+                    } else {
+                        None
+                    })
+                    .render(status, buf);
+            }
         }
     }
 }
