@@ -27,6 +27,7 @@ impl SearchState {
     pub(crate) fn clear(&mut self) {
         self.pattern.clear();
         self.matches.clear();
+        self.selected_index = None;
     }
 
     pub(crate) fn trigger_search(&mut self, lines: &Lines) {

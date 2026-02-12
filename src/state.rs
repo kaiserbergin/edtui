@@ -107,6 +107,12 @@ impl EditorState {
         self.search.pattern.clone()
     }
 
+    /// Clears selection and search state (e.g. when switching keybinding mode).
+    pub fn clear_selection_and_search(&mut self) {
+        self.selection = None;
+        self.search.clear();
+    }
+
     /// Clamps the column of the cursor if the cursor is out of bounds.
     /// In normal or visual mode, clamps on `col = len() - 1`, in insert
     /// mode on `col = len()`.
