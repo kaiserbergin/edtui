@@ -238,7 +238,7 @@ fn get_visual_mode_key_bindings() -> HashMap<KeyEventRegister, Action> {
     insert_ctrl_both_cases(&mut map, Visual, 'e', MoveUp(1).into());
     insert_ctrl_both_cases(&mut map, Visual, 'x', MoveDown(1).into());
     insert_ctrl_both_cases(&mut map, Visual, 'a', MoveWordBackward(1).into());
-    insert_ctrl_both_cases(&mut map, Visual, 'f', MoveWordForward(1).into());
+    insert_ctrl_both_cases(&mut map, Visual, 'f', MoveWordForward(1).chain(MoveBackward(1)).into());
     insert_ctrl_both_cases(&mut map, Visual, 'r', MoveHalfPageUp().into());
     insert_ctrl_both_cases(&mut map, Visual, 'c', MoveHalfPageDown().into());
 
