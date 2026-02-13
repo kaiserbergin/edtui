@@ -113,6 +113,21 @@ pub(crate) fn skip_whitespace(lines: &Lines, index: &mut Index2) {
     }
 }
 
+pub(crate) fn skip_whitespace_for_selection(lines: &Lines, index: &mut Index2) {
+    if let Some(line) = lines.get(RowIndex::new(index.row)) {
+        for (i, &ch) in line.iter().enumerate().skip(index.col.saturating_sub(1)) {
+            if !ch.is_ascii_whitespace() && i > index.col {
+                index.col = i.saturating_sub(1);
+                break;
+            }
+            if i == line.len().saturating_sub(1) {
+                index.col = i;
+                break;
+            }
+        }
+    }
+}
+
 /// Skip empty lines.
 pub(crate) fn skip_empty_lines(lines: &Lines, row_index: &mut usize) {
     for line in lines.iter_row().skip(*row_index) {
@@ -249,6 +264,172 @@ mod tests {
 
     fn test_lines() -> Lines {
         Lines::from("Hello World!\n\n123.")
+    }
+
+    fn better_test_lines() -> Lines {
+        let lines = vec![
+            "01  4 67 ",
+            "",
+            " ",
+            " Hello",
+            "0! ",
+            "\n",
+            "0!"
+        ];
+        Lines::from(lines.join("\n"))
+    }
+    
+    #[test]
+    fn test_skip_whitespace_for_selection_line_7_col_0() {
+        let lines = better_test_lines();
+        let mut index = Index2::new(7, 0);
+        skip_whitespace_for_selection(&lines, &mut index);
+        assert_eq!(index.col, 0);
+        assert_eq!(index.row, 7);
+    }
+
+    #[test]
+    fn test_skip_whitespace_for_selection_line_6_col_0() {
+        let lines = better_test_lines();
+        let mut index = Index2::new(6, 0);
+        skip_whitespace_for_selection(&lines, &mut index);
+        assert_eq!(index.col, 0);
+        assert_eq!(index.row, 6);
+    }
+    
+    #[test]
+    fn test_skip_whitespace_for_selection_line_5_col_0() {
+        let lines = better_test_lines();
+        let mut index = Index2::new(5, 0);
+        skip_whitespace_for_selection(&lines, &mut index);
+        assert_eq!(index.col, 0);
+        assert_eq!(index.row, 5);
+    }
+
+    #[test]
+    fn test_skip_whitespace_for_selection_line_4_col_1() {
+        let lines = better_test_lines();
+        let mut index = Index2::new(4, 1);
+        skip_whitespace_for_selection(&lines, &mut index);
+        assert_eq!(index.col, 2);
+        assert_eq!(index.row, 4);
+    }
+    
+    #[test]
+    fn test_skip_whitespace_for_selection_line_3_col_5() {
+        let lines = better_test_lines();
+        let mut index = Index2::new(3, 5);
+        skip_whitespace_for_selection(&lines, &mut index);
+        assert_eq!(index.col, 5);
+        assert_eq!(index.row, 3);
+    }
+
+    #[test]
+    fn test_skip_whitespace_for_selection_line_3_col_0() {
+        let lines = better_test_lines();
+        let mut index = Index2::new(3, 0);
+        skip_whitespace_for_selection(&lines, &mut index);
+        assert_eq!(index.col, 0);
+        assert_eq!(index.row, 3);
+    }
+    
+    #[test]
+    fn test_skip_whitespace_for_selection_line_2_col_0() {
+        let lines = better_test_lines();
+        let mut index = Index2::new(2, 0);
+        skip_whitespace_for_selection(&lines, &mut index);
+        assert_eq!(index.col, 0);
+        assert_eq!(index.row, 2);
+    }
+
+    #[test]
+    fn test_skip_whitespace_for_selection_line_1_col_0() {
+        let lines = better_test_lines();
+        let mut index = Index2::new(1, 0);
+        skip_whitespace_for_selection(&lines, &mut index);
+        assert_eq!(index.col, 0);
+        assert_eq!(index.row, 1);
+    }
+
+    #[test]
+    fn test_skip_whitespace_for_selection_line_0_col_0() {
+        let lines = better_test_lines();
+        let mut index = Index2::new(0, 0);
+        skip_whitespace_for_selection(&lines, &mut index);
+        assert_eq!(index.col, 0);
+        assert_eq!(index.row, 0);
+    }
+
+    #[test]
+    fn test_skip_whitespace_for_selection_line_0_col_1() {
+        let lines = better_test_lines();
+        let mut index = Index2::new(0, 1);
+        skip_whitespace_for_selection(&lines, &mut index);
+        assert_eq!(index.col, 3);
+        assert_eq!(index.row, 0);
+    }
+
+    #[test]
+    fn test_skip_whitespace_for_selection_line_0_col_2() {
+        let lines = better_test_lines();
+        let mut index = Index2::new(0, 2);
+        skip_whitespace_for_selection(&lines, &mut index);
+        assert_eq!(index.col, 3);
+        assert_eq!(index.row, 0);
+    }
+
+    #[test]
+    fn test_skip_whitespace_for_selection_line_0_col_3() {
+        let lines = better_test_lines();
+        let mut index = Index2::new(0, 3);
+        skip_whitespace_for_selection(&lines, &mut index);
+        assert_eq!(index.col, 3);
+        assert_eq!(index.row, 0);
+    }
+
+    #[test]
+    fn test_skip_whitespace_for_selection_line_0_col_4() {
+        let lines = better_test_lines();
+        let mut index = Index2::new(0, 4);
+        skip_whitespace_for_selection(&lines, &mut index);
+        assert_eq!(index.col, 5);
+        assert_eq!(index.row, 0);
+    }
+
+    #[test]
+    fn test_skip_whitespace_for_selection_line_0_col_5() {
+        let lines = better_test_lines();
+        let mut index = Index2::new(0, 5);
+        skip_whitespace_for_selection(&lines, &mut index);
+        assert_eq!(index.col, 5);
+        assert_eq!(index.row, 0);
+    }
+
+    #[test]
+    fn test_skip_whitespace_for_selection_line_0_col_6() {
+        let lines = better_test_lines();
+        let mut index = Index2::new(0, 6);
+        skip_whitespace_for_selection(&lines, &mut index);
+        assert_eq!(index.col, 6);
+        assert_eq!(index.row, 0);
+    }
+
+    #[test]
+    fn test_skip_whitespace_for_selection_line_0_col_7() {
+        let lines = better_test_lines();
+        let mut index = Index2::new(0, 7);
+        skip_whitespace_for_selection(&lines, &mut index);
+        assert_eq!(index.col, 8);
+        assert_eq!(index.row, 0);
+    }
+
+    #[test]
+    fn test_skip_whitespace_for_selection_line_0_col_8() {
+        let lines = better_test_lines();
+        let mut index = Index2::new(0, 8);
+        skip_whitespace_for_selection(&lines, &mut index);
+        assert_eq!(index.col, 8);
+        assert_eq!(index.row, 0);
     }
 
     #[test]

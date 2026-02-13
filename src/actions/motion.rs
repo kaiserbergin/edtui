@@ -1,7 +1,7 @@
 use std::cmp::min;
 
 use crate::{
-    helper::{find_matching_bracket, skip_empty_lines},
+    helper::{find_matching_bracket, skip_empty_lines, skip_whitespace_for_selection},
     state::selection::set_selection_with_lines,
 };
 use jagged::Index2;
@@ -109,7 +109,18 @@ impl Execute for MoveWordForward {
 }
 
 fn move_word_forward(state: &mut EditorState) {
-    let start_char_class = CharacterClass::from(state.lines.get(state.cursor));
+    let mut start_char_class = CharacterClass::from(state.lines.get(state.cursor));
+
+    if state.mode == EditorMode::Visual {
+        let next_char_class = CharacterClass::from(state.lines.get(Index2::new(
+            state.cursor.row,
+            state.cursor.col.saturating_add(1),
+        )));
+        if next_char_class != start_char_class {
+            // state.cursor = Index2::new(state.cursor.row, state.cursor.col.saturating_add(1));
+            start_char_class = next_char_class;
+        }
+    }
 
     let start_index = match (
         state.lines.is_last_col(state.cursor),
@@ -125,8 +136,21 @@ fn move_word_forward(state: &mut EditorState) {
 
     for (next_char, index) in state.lines.iter().from(start_index) {
         if CharacterClass::from(next_char) != start_char_class {
-            state.cursor = index;
-            skip_whitespace(&state.lines, &mut state.cursor);
+            if state.mode == EditorMode::Visual {
+                if index.col == 0 && index.row > state.cursor.row {
+                    // Different class started on next line → stay at end of current line
+                    state.cursor = Index2::new(
+                        state.cursor.row,
+                        state.lines.last_col_index(state.cursor.row),
+                    );
+                } else {
+                    state.cursor = Index2::new(index.row, index.col.saturating_sub(1));
+                    skip_whitespace_for_selection(&state.lines, &mut state.cursor);
+                }
+            } else {
+                state.cursor = index;
+                skip_whitespace(&state.lines, &mut state.cursor);
+            }
             return;
         }
     }
@@ -402,7 +426,47 @@ mod tests {
 
     use super::*;
     fn test_state() -> EditorState {
-        EditorState::new(Lines::from("Hello World!\n\n123."))
+        EditorState::new(Lines::from("Hello World!\n\n123. \n  3 \n0\n"))
+    }
+
+    fn test_state_advanced() -> EditorState {
+        EditorState::new(Lines::from("He!lo World!\n\n123. .\n. d"))
+    }
+
+    #[test]
+    fn test_move_word_forward_visual_mode() {
+        let mut state = test_state_advanced();
+        state.mode = EditorMode::Visual;
+
+        MoveWordForward(1).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 1));
+
+        MoveWordForward(1).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 2));
+
+        MoveWordForward(1).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 5));
+
+        MoveWordForward(1).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 10));
+
+        MoveWordForward(1).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 11));
+
+        MoveWordForward(1).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(1, 0));
+
+        MoveWordForward(1).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(2, 0));
+
+        MoveWordForward(1).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(2, 2));
+
+        MoveWordForward(1).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(2, 4));
+        
+        MoveWordForward(1).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(3, 1));
     }
 
     #[test]
