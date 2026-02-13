@@ -198,7 +198,7 @@ impl Widget for EditorStatusLine {
 
         let search_text = match self.search {
             None => String::new(),
-            Some(search) => format!("Find: {search}"),
+            Some(search) => format!(" Find: {search}"),
         };
 
         let display_style = self
