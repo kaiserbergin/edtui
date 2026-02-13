@@ -37,10 +37,6 @@ pub fn key_bindings() -> HashMap<KeyEventRegister, Action> {
 fn get_visual_mode_key_bindings() -> HashMap<KeyEventRegister, Action> {
     let mut key_map = HashMap::from([
         (
-            KeyEventRegister::v(vec![KeyInput::shift(KeyCode::Esc)]),
-            SwitchMode(Normal).chain(SwitchMode(Insert)).into(),
-        ),
-        (
             KeyEventRegister::v(vec![KeyInput::shift(KeyCode::Right)]),
             MoveForward(1).into(),
         ),
@@ -171,6 +167,11 @@ fn get_visual_mode_key_bindings() -> HashMap<KeyEventRegister, Action> {
         Visual,
         KeyCode::Backspace,
         DeleteSelection.chain(SwitchMode(Insert)).into(),
+    ));
+    key_map.extend(get_all_modifiers_map(
+        Visual,
+        KeyCode::Esc,
+        SwitchMode(Normal).chain(SwitchMode(Insert)).into(),
     ));
 
     key_map
@@ -350,7 +351,7 @@ fn get_search_mode_key_bindings() -> HashMap<KeyEventRegister, Action> {
     ])
 }
 
-fn get_all_modifiers_map(
+pub(crate) fn get_all_modifiers_map(
     editor_mode: EditorMode,
     key_code: KeyCode,
     action: Action,

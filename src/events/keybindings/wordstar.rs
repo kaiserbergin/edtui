@@ -9,6 +9,7 @@ use crate::actions::{
     MoveWordBackward, MoveWordForward, MoveWordForwardToEndOfWord, Paste, RemoveCharFromSearch,
     SelectCurrentSearch, StopSearch, SwitchMode, Undo,
 };
+use crate::events::keybindings::ms_word::get_all_modifiers_map;
 use crate::events::{KeyEventRegister, KeyInput};
 use crate::EditorMode;
 use std::collections::HashMap;
@@ -302,13 +303,11 @@ fn get_visual_mode_key_bindings() -> HashMap<KeyEventRegister, Action> {
     // =====================================================================
     // Escape / cancel selection
     // =====================================================================
-
-    map.insert(
-        KeyEventRegister::v(vec![KeyInput::new(KeyCode::Esc)]),
-        SwitchMode(EditorMode::Normal)
-            .chain(SwitchMode(Insert))
-            .into(),
-    );
+    map.extend(get_all_modifiers_map(
+        Visual,
+        KeyCode::Esc,
+        SwitchMode(EditorMode::Normal).chain(SwitchMode(Insert)).into(),
+    ));
 
     // Arrow keys in Visual mode
     map.insert(
