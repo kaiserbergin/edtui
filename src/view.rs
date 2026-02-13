@@ -287,20 +287,36 @@ impl Widget for EditorView<'_, '_> {
             let col_skips = offset_x;
             num_rendered_rows += 1;
 
-            let spans = generate_spans(
-                line,
-                &selections,
-                row_index,
-                col_skips,
-                &self.theme.base,
-                &self.theme.selection_style,
-                #[cfg(feature = "syntax-highlighting")]
-                self.syntax_highlighter.as_ref(),
-            );
-
             let render_line = if wrap_lines {
-                RenderLine::Wrapped(LineWrapper::wrap_spans(spans, width, tab_width))
+                let spans_no_sel = generate_spans_without_selection(
+                    line,
+                    row_index,
+                    col_skips,
+                    &self.theme.base,
+                    #[cfg(feature = "syntax-highlighting")]
+                    self.syntax_highlighter.as_ref(),
+                );
+                let wrapped = LineWrapper::wrap_spans(spans_no_sel, width, tab_width);
+                let row_len = line.len();
+                let ranges = internal::selection_ranges_for_row(&selections, row_index, row_len);
+                let wrapped_with_sel = internal::apply_selection_to_wrapped_spans(
+                    &wrapped,
+                    &ranges,
+                    self.theme.selection_style,
+                    col_skips,
+                );
+                RenderLine::Wrapped(wrapped_with_sel)
             } else {
+                let spans = generate_spans(
+                    line,
+                    &selections,
+                    row_index,
+                    col_skips,
+                    &self.theme.base,
+                    &self.theme.selection_style,
+                    #[cfg(feature = "syntax-highlighting")]
+                    self.syntax_highlighter.as_ref(),
+                );
                 RenderLine::Single(spans)
             };
 
@@ -396,6 +412,26 @@ impl Widget for EditorView<'_, '_> {
             }
         }
     }
+}
+
+fn generate_spans_without_selection<'a>(
+    line: &[char],
+    row_index: usize,
+    col_skips: usize,
+    base_style: &Style,
+    #[cfg(feature = "syntax-highlighting")] syntax_highlighter: Option<&SyntaxHighlighter>,
+) -> Vec<Span<'a>> {
+    #[cfg(feature = "syntax-highlighting")]
+    if let Some(syntax) = syntax_highlighter {
+        return internal::line_into_highlighted_spans_without_selections(
+            line,
+            syntax,
+            row_index,
+            col_skips,
+            base_style,
+        );
+    }
+    internal::line_into_spans_without_selections(line, row_index, col_skips, base_style)
 }
 
 fn generate_spans<'a>(

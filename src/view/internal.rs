@@ -27,11 +27,13 @@ impl InternalSpan {
     }
 
     pub(crate) fn spans_len(spans: &[Self]) -> usize {
-        spans.iter().fold(0, |sum, span| sum + span.content.len())
+        spans
+            .iter()
+            .fold(0, |sum, span| sum + span.content.chars().count())
     }
 
     /// Splits an [`InternalSpan`] at a [`Selection`]. Returns an array of spans.
-    fn split_at_selection(
+    pub(crate) fn split_at_selection(
         spans: &[Self],
         row_index: usize,
         selection: &Selection,
@@ -58,7 +60,7 @@ impl InternalSpan {
         let mut split_span_at = 0;
 
         for (i, span) in spans.iter().enumerate() {
-            let span_width = span.content.len();
+            let span_width = span.content.chars().count();
             let span_start = span_offset;
             let span_end = span_offset + span_width;
 
@@ -210,6 +212,40 @@ pub(crate) fn line_into_spans_with_selections<'a>(
     spans
 }
 
+/// Converts a line into a single-style vector of `Span`s (no selection).
+/// Used when wrapping first so wrap points don't depend on selection.
+pub(crate) fn line_into_spans_without_selections<'a>(
+    line: &[char],
+    _row_index: usize,
+    col_skips: usize,
+    base_style: &Style,
+) -> Vec<Span<'a>> {
+    let s: String = line.iter().skip(col_skips).collect();
+    if s.is_empty() {
+        return vec![];
+    }
+    vec![Span::styled(s, *base_style)]
+}
+
+/// Converts a line into a vector of `Span`s with syntax highlighting only (no selection).
+#[cfg(feature = "syntax-highlighting")]
+pub(crate) fn line_into_highlighted_spans_without_selections<'a>(
+    line: &[char],
+    syntax_highlighter: &crate::SyntaxHighlighter,
+    _row_index: usize,
+    col_skips: usize,
+    base_style: &Style,
+) -> Vec<Span<'a>> {
+    let line_str: String = line.iter().collect();
+    let mut internal_spans = syntax_highlighter.highlight_line(&line_str, base_style);
+
+    if col_skips > 0 {
+        InternalSpan::crop_spans(&mut internal_spans, col_skips);
+    }
+
+    internal_spans.into_iter().map(Span::from).collect()
+}
+
 /// Converts a line into a vector of `Span`s, applying styles based on the given selections
 /// and syntax highlighting.
 #[cfg(feature = "syntax-highlighting")]
@@ -242,6 +278,94 @@ pub(crate) fn line_into_highlighted_spans_with_selections<'a>(
     }
 
     internal_spans.into_iter().map(Span::from).collect()
+}
+
+/// Returns the union of selected column ranges for the given logical row.
+/// `row_len` is the character length of the line (e.g. `line.len()`).
+/// Result is sorted and disjoint.
+pub(crate) fn selection_ranges_for_row(
+    selections: &[&Option<Selection>],
+    row_index: usize,
+    row_len: usize,
+) -> Vec<(usize, usize)> {
+    let mut ranges: Vec<(usize, usize)> = selections
+        .iter()
+        .filter_map(|sel| sel.as_ref())
+        .filter_map(|sel| sel.get_selected_columns_in_row(row_index, row_len))
+        .collect();
+
+    if ranges.is_empty() {
+        return ranges;
+    }
+
+    ranges.sort_by_key(|&(s, _)| s);
+
+    let mut merged = vec![ranges[0]];
+    for (start, end) in ranges.into_iter().skip(1) {
+        let last_end = merged.last().unwrap().1;
+        if start <= last_end {
+            merged.last_mut().unwrap().1 = last_end.max(end);
+        } else {
+            merged.push((start, end));
+        }
+    }
+    merged
+}
+
+/// Applies selection highlight to pre-wrapped spans.
+/// `wrapped_lines`: result of `LineWrapper::wrap_spans` (no selection).
+/// `ranges`: from `selection_ranges_for_row` (logical line character indices).
+/// `col_skips`: horizontal scroll; wrapped content starts at this logical offset.
+pub(crate) fn apply_selection_to_wrapped_spans<'a>(
+    wrapped_lines: &[Vec<Span<'a>>],
+    ranges: &[(usize, usize)],
+    highlight_style: Style,
+    col_skips: usize,
+) -> Vec<Vec<Span<'a>>> {
+    if ranges.is_empty() {
+        return wrapped_lines.to_vec();
+    }
+
+    let mut result = Vec::with_capacity(wrapped_lines.len());
+    let mut logical_offset = col_skips;
+
+    for line_spans in wrapped_lines {
+        let line_char_count: usize = line_spans
+            .iter()
+            .map(|s| s.content.chars().count())
+            .sum();
+        let line_start = logical_offset;
+        let line_end = logical_offset + line_char_count;
+
+        let mut internal: Vec<InternalSpan> = line_spans
+            .iter()
+            .map(|s| InternalSpan::new(s.content.as_ref(), &s.style))
+            .collect();
+
+        for &(range_start, range_end) in ranges {
+            let seg_start = range_start.saturating_sub(line_start);
+            let seg_end = (range_end.min(line_end)).saturating_sub(line_start);
+
+            if seg_start >= seg_end || seg_start >= line_char_count {
+                continue;
+            }
+
+            let sel = Selection::new(
+                Index2::new(0, seg_start),
+                Index2::new(0, seg_end.min(line_char_count)),
+            );
+            if let Some(with_sel) =
+                InternalSpan::split_at_selection(&internal, 0, &sel, &highlight_style)
+            {
+                internal = with_sel;
+            }
+        }
+
+        result.push(internal.into_iter().map(Span::from).collect());
+        logical_offset = line_end;
+    }
+
+    result
 }
 
 /// Finds the position of a character within wrapped spans based on a given
