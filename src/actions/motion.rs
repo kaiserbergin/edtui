@@ -21,11 +21,19 @@ pub struct MoveForward(pub usize);
 
 impl Execute for MoveForward {
     fn execute(&mut self, state: &mut EditorState) {
+        let wrap = state.view.wrap && state.view.screen_area.width > 0;
         for _ in 0..self.0 {
             if state.cursor.col >= max_col(&state.lines, &state.cursor, state.mode) {
-                break;
+                // In wrap mode, cross to the start of the next logical line.
+                if wrap && state.cursor.row < state.lines.len().saturating_sub(1) {
+                    state.cursor.row += 1;
+                    state.cursor.col = 0;
+                } else {
+                    break;
+                }
+            } else {
+                state.cursor.col += 1;
             }
-            state.cursor.col += 1;
         }
         state.update_desired_display_col();
         if state.mode == EditorMode::Visual {
@@ -39,15 +47,23 @@ pub struct MoveBackward(pub usize);
 
 impl Execute for MoveBackward {
     fn execute(&mut self, state: &mut EditorState) {
+        let wrap = state.view.wrap && state.view.screen_area.width > 0;
         for _ in 0..self.0 {
             if state.cursor.col == 0 {
-                break;
+                // In wrap mode, cross to the end of the previous logical line.
+                if wrap && state.cursor.row > 0 {
+                    state.cursor.row -= 1;
+                    state.cursor.col = max_col(&state.lines, &state.cursor, state.mode);
+                } else {
+                    break;
+                }
+            } else {
+                let mc = max_col(&state.lines, &state.cursor, state.mode);
+                if state.cursor.col > mc {
+                    state.cursor.col = mc;
+                }
+                state.cursor.col = state.cursor.col.saturating_sub(1);
             }
-            let max_col = max_col(&state.lines, &state.cursor, state.mode);
-            if state.cursor.col > max_col {
-                state.cursor.col = max_col;
-            }
-            state.cursor.col = state.cursor.col.saturating_sub(1);
         }
         state.update_desired_display_col();
         if state.mode == EditorMode::Visual {
@@ -236,6 +252,7 @@ impl Execute for MoveWordForward {
             move_word_forward(state);
         }
 
+        state.update_desired_display_col();
         if state.mode == EditorMode::Visual {
             set_selection_with_lines(&mut state.selection, state.cursor, &state.lines);
         }
@@ -309,6 +326,7 @@ impl Execute for MoveWordForwardToEndOfWord {
             move_word_forward_to_end_of_word(state);
         }
 
+        state.update_desired_display_col();
         if state.mode == EditorMode::Visual {
             set_selection_with_lines(&mut state.selection, state.cursor, &state.lines);
         }
@@ -363,6 +381,7 @@ impl Execute for MoveWordBackward {
             move_word_backward(state);
         }
 
+        state.update_desired_display_col();
         if state.mode == EditorMode::Visual {
             set_selection_with_lines(&mut state.selection, state.cursor, &state.lines);
         }

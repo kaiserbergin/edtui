@@ -637,8 +637,11 @@ mod tests {
 
     #[test]
     fn test_change_around_word() {
+        use crate::clipboard::InternalClipboard;
+
         let lines = Lines::from("Hello World");
         let mut state = EditorState::new(lines);
+        state.set_clipboard(InternalClipboard::default());
         state.cursor = Index2::new(0, 1); // on 'e' of "Hello"
 
         ChangeAroundWord.execute(&mut state);
