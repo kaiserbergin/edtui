@@ -6,7 +6,7 @@ mod undo;
 pub(crate) mod view;
 
 use self::search::SearchState;
-use self::view::ViewState;
+use self::view::{cursor_display_col, ViewState};
 use self::{mode::EditorMode, selection::Selection, undo::Stack};
 use crate::actions::Execute;
 use crate::clipboard::{Clipboard, ClipboardTrait};
@@ -43,6 +43,11 @@ pub struct EditorState {
     /// Clipboard for yank and paste operations.
     pub(crate) clip: Clipboard,
 
+    /// The desired display (visual/screen) column to aim for when moving
+    /// vertically. Updated by horizontal movements; used by up/down to
+    /// preserve the same screen position across lines.
+    pub(crate) desired_display_col: usize,
+
     /// Flag indicating a system editor was requested.
     #[cfg(feature = "system-editor")]
     pub(crate) system_edit_requested: bool,
@@ -77,6 +82,7 @@ impl EditorState {
             undo: Stack::new(),
             redo: Stack::new(),
             clip: Clipboard::default(),
+            desired_display_col: 0,
             #[cfg(feature = "system-editor")]
             system_edit_requested: false,
         }
@@ -119,5 +125,24 @@ impl EditorState {
     pub(crate) fn clamp_column(&mut self) {
         let max_col = max_col(&self.lines, &self.cursor, self.mode);
         self.cursor.col = self.cursor.col.min(max_col);
+    }
+
+    /// Updates `desired_display_col` from the current cursor position.
+    /// Call this after any horizontal movement so that the next up/down
+    /// aims at the same visual column.
+    pub(crate) fn update_desired_display_col(&mut self) {
+        let width = self.view.screen_area.width as usize;
+        let tab_width = self.view.tab_width;
+        // When width is 0 (e.g. before the first render) use a very large
+        // width so the display column equals the absolute character width
+        // from the start of the line.
+        let effective_width = if width > 0 { width } else { usize::MAX };
+        self.desired_display_col = cursor_display_col(
+            &self.lines,
+            self.cursor.row,
+            self.cursor.col,
+            effective_width,
+            tab_width,
+        );
     }
 }

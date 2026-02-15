@@ -84,6 +84,10 @@ impl MouseEventHandler {
                     state.cursor = cursor;
                 }
 
+                // Update desired display column so subsequent up/down
+                // movements aim at the clicked visual column.
+                state.update_desired_display_col();
+
                 if let MouseEvent::Drag(_) = event {
                     set_selection(&mut state.selection, state.cursor);
                 }

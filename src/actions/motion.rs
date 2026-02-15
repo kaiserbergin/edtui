@@ -4,7 +4,7 @@ use crate::{
     helper::{find_matching_bracket, skip_empty_lines, skip_whitespace_for_selection},
     state::selection::set_selection_with_lines,
     state::view::{
-        col_to_visual_row_in_wrapped, logical_col_to_display_col, visual_pos_to_logical_col,
+        col_to_visual_row_in_wrapped, visual_pos_to_logical_col,
     },
     view::line_wrapper::LineWrapper,
 };
@@ -27,6 +27,7 @@ impl Execute for MoveForward {
             }
             state.cursor.col += 1;
         }
+        state.update_desired_display_col();
         if state.mode == EditorMode::Visual {
             set_selection_with_lines(&mut state.selection, state.cursor, &state.lines);
         }
@@ -48,6 +49,7 @@ impl Execute for MoveBackward {
             }
             state.cursor.col = state.cursor.col.saturating_sub(1);
         }
+        state.update_desired_display_col();
         if state.mode == EditorMode::Visual {
             set_selection_with_lines(&mut state.selection, state.cursor, &state.lines);
         }
@@ -71,6 +73,7 @@ impl Execute for MoveUp {
                     break;
                 }
                 state.cursor.row = state.cursor.row.saturating_sub(1);
+                place_cursor_at_desired_display_col(state);
             }
         }
         if state.mode == EditorMode::Visual {
@@ -96,6 +99,7 @@ impl Execute for MoveDown {
                     break;
                 }
                 state.cursor.row += 1;
+                place_cursor_at_desired_display_col(state);
             }
         }
         if state.mode == EditorMode::Visual {
@@ -104,10 +108,43 @@ impl Execute for MoveDown {
     }
 }
 
+/// Places the cursor column on the current row at the logical column
+/// corresponding to `state.desired_display_col`, clamping to the line's
+/// max column. Works for both wrap and no-wrap: wraps the line to find
+/// the first visual row containing the current column and resolves the
+/// desired display column within it. For no-wrap the line has a single
+/// visual row so the display column maps directly.
+fn place_cursor_at_desired_display_col(state: &mut EditorState) {
+    let row = state.cursor.row;
+    let width = state.view.screen_area.width as usize;
+    let tab_width = state.view.tab_width;
+    let desired = state.desired_display_col;
+
+    let line = match state.lines.get(jagged::index::RowIndex::new(row)) {
+        Some(l) => l,
+        None => {
+            state.cursor.col = 0;
+            return;
+        }
+    };
+
+    // When wrap is off, treat the whole line as a single visual row.
+    let effective_width = if state.view.wrap && width > 0 { width } else { usize::MAX };
+    let wrapped = LineWrapper::wrap_line(line, effective_width, tab_width);
+    // Use visual row 0 (for no-wrap this is the only row; for wrap after a
+    // row change without visual context we start at the first visual row).
+    let new_col = visual_pos_to_logical_col(&wrapped, 0, desired, tab_width);
+    let max = max_col(&state.lines, &Index2::new(row, 0), state.mode);
+    state.cursor.col = new_col.min(max);
+}
+
 /// Move cursor up by one visual (screen) line when wrap is on.
+/// Uses `state.desired_display_col` so the cursor keeps the same visual
+/// horizontal position across lines.
 fn move_up_visual(state: &mut EditorState, width: usize, tab_width: usize) {
     let row = state.cursor.row;
     let col = state.cursor.col;
+    let desired = state.desired_display_col;
 
     let line = match state.lines.get(jagged::index::RowIndex::new(row)) {
         Some(l) => l,
@@ -116,12 +153,12 @@ fn move_up_visual(state: &mut EditorState, width: usize, tab_width: usize) {
 
     let wrapped = LineWrapper::wrap_line(line, width, tab_width);
     let visual_row = col_to_visual_row_in_wrapped(&wrapped, col);
-    let display_col = logical_col_to_display_col(line, &wrapped, visual_row, col, tab_width);
 
     if visual_row > 0 {
         // Move to the previous visual line within the same logical line.
-        let new_col = visual_pos_to_logical_col(&wrapped, visual_row - 1, display_col, tab_width);
-        state.cursor.col = new_col;
+        let new_col = visual_pos_to_logical_col(&wrapped, visual_row - 1, desired, tab_width);
+        let max = max_col(&state.lines, &Index2::new(row, 0), state.mode);
+        state.cursor.col = new_col.min(max);
     } else {
         // Move to the last visual line of the previous logical line.
         if row == 0 {
@@ -134,16 +171,20 @@ fn move_up_visual(state: &mut EditorState, width: usize, tab_width: usize) {
         };
         let prev_wrapped = LineWrapper::wrap_line(prev_line, width, tab_width);
         let last_visual = prev_wrapped.len().saturating_sub(1);
-        let new_col = visual_pos_to_logical_col(&prev_wrapped, last_visual, display_col, tab_width);
+        let new_col = visual_pos_to_logical_col(&prev_wrapped, last_visual, desired, tab_width);
+        let max = max_col(&state.lines, &Index2::new(prev_row, 0), state.mode);
         state.cursor.row = prev_row;
-        state.cursor.col = new_col;
+        state.cursor.col = new_col.min(max);
     }
 }
 
 /// Move cursor down by one visual (screen) line when wrap is on.
+/// Uses `state.desired_display_col` so the cursor keeps the same visual
+/// horizontal position across lines.
 fn move_down_visual(state: &mut EditorState, width: usize, tab_width: usize) {
     let row = state.cursor.row;
     let col = state.cursor.col;
+    let desired = state.desired_display_col;
 
     let line = match state.lines.get(jagged::index::RowIndex::new(row)) {
         Some(l) => l,
@@ -152,13 +193,13 @@ fn move_down_visual(state: &mut EditorState, width: usize, tab_width: usize) {
 
     let wrapped = LineWrapper::wrap_line(line, width, tab_width);
     let visual_row = col_to_visual_row_in_wrapped(&wrapped, col);
-    let display_col = logical_col_to_display_col(line, &wrapped, visual_row, col, tab_width);
     let total_visual = wrapped.len().max(1);
 
     if visual_row + 1 < total_visual {
         // Move to the next visual line within the same logical line.
-        let new_col = visual_pos_to_logical_col(&wrapped, visual_row + 1, display_col, tab_width);
-        state.cursor.col = new_col;
+        let new_col = visual_pos_to_logical_col(&wrapped, visual_row + 1, desired, tab_width);
+        let max = max_col(&state.lines, &Index2::new(row, 0), state.mode);
+        state.cursor.col = new_col.min(max);
     } else {
         // Move to the first visual line of the next logical line.
         if row >= state.lines.len().saturating_sub(1) {
@@ -170,9 +211,10 @@ fn move_down_visual(state: &mut EditorState, width: usize, tab_width: usize) {
             None => return,
         };
         let next_wrapped = LineWrapper::wrap_line(next_line, width, tab_width);
-        let new_col = visual_pos_to_logical_col(&next_wrapped, 0, display_col, tab_width);
+        let new_col = visual_pos_to_logical_col(&next_wrapped, 0, desired, tab_width);
+        let max = max_col(&state.lines, &Index2::new(next_row, 0), state.mode);
         state.cursor.row = next_row;
-        state.cursor.col = new_col;
+        state.cursor.col = new_col.min(max);
     }
 }
 
@@ -366,6 +408,7 @@ pub struct MoveToStartOfLine();
 impl Execute for MoveToStartOfLine {
     fn execute(&mut self, state: &mut EditorState) {
         state.cursor.col = 0;
+        state.update_desired_display_col();
 
         if state.mode == EditorMode::Visual {
             set_selection_with_lines(&mut state.selection, state.cursor, &state.lines);
@@ -380,6 +423,7 @@ impl Execute for MoveToFirst {
     fn execute(&mut self, state: &mut EditorState) {
         state.cursor.col = 0;
         skip_whitespace(&state.lines, &mut state.cursor);
+        state.update_desired_display_col();
 
         if state.mode == EditorMode::Visual {
             set_selection_with_lines(&mut state.selection, state.cursor, &state.lines);
@@ -394,6 +438,7 @@ pub struct MoveToEndOfLine();
 impl Execute for MoveToEndOfLine {
     fn execute(&mut self, state: &mut EditorState) {
         state.cursor.col = max_col(&state.lines, &state.cursor, state.mode);
+        state.update_desired_display_col();
 
         if state.mode == EditorMode::Visual {
             set_selection_with_lines(&mut state.selection, state.cursor, &state.lines);
@@ -408,6 +453,8 @@ pub struct MoveToFirstRow();
 impl Execute for MoveToFirstRow {
     fn execute(&mut self, state: &mut EditorState) {
         state.cursor.row = 0;
+        state.clamp_column();
+        state.update_desired_display_col();
 
         if state.mode == EditorMode::Visual {
             set_selection_with_lines(&mut state.selection, state.cursor, &state.lines);
@@ -422,6 +469,8 @@ pub struct MoveToLastRow();
 impl Execute for MoveToLastRow {
     fn execute(&mut self, state: &mut EditorState) {
         state.cursor.row = state.lines.len().saturating_sub(1);
+        state.clamp_column();
+        state.update_desired_display_col();
 
         if state.mode == EditorMode::Visual {
             set_selection_with_lines(&mut state.selection, state.cursor, &state.lines);
@@ -464,6 +513,7 @@ impl Execute for MoveHalfPageDown {
         } else {
             let jump_rows = state.view.num_rows / 2;
             state.cursor.row = min(state.cursor.row + jump_rows, state.lines.last_row_index());
+            place_cursor_at_desired_display_col(state);
         }
 
         if state.mode == EditorMode::Visual {
@@ -490,6 +540,7 @@ impl Execute for MoveHalfPageUp {
         } else {
             let jump_rows = state.view.num_rows / 2;
             state.cursor.row = state.cursor.row.saturating_sub(jump_rows);
+            place_cursor_at_desired_display_col(state);
         }
 
         if state.mode == EditorMode::Visual {
@@ -616,32 +667,110 @@ mod tests {
 
     #[test]
     fn test_move_down() {
+        // "Hello World!\n\n123."
+        // Line 0: "Hello World!" (12 chars, max col 11)
+        // Line 1: "" (empty, max col 0)
+        // Line 2: "123." (4 chars, max col 3)
         let mut state = test_state();
         state.cursor = Index2::new(0, 6);
+        state.desired_display_col = 6;
 
+        // Move down to empty line — clamps to col 0.
         MoveDown(1).execute(&mut state);
-        assert_eq!(state.cursor, Index2::new(1, 6));
+        assert_eq!(state.cursor, Index2::new(1, 0));
 
+        // Move down to "123." — desired 6 clamps to max col 3.
         MoveDown(1).execute(&mut state);
-        assert_eq!(state.cursor, Index2::new(2, 6));
+        assert_eq!(state.cursor, Index2::new(2, 3));
 
+        // Already on last row — no change.
         MoveDown(1).execute(&mut state);
-        assert_eq!(state.cursor, Index2::new(2, 6));
+        assert_eq!(state.cursor, Index2::new(2, 3));
     }
 
     #[test]
     fn test_move_up() {
+        // "Hello World!\n\n123."
         let mut state = test_state();
         state.cursor = Index2::new(2, 2);
+        state.desired_display_col = 2;
 
+        // Move up to empty line — clamps to col 0.
         MoveUp(1).execute(&mut state);
-        assert_eq!(state.cursor, Index2::new(1, 2));
+        assert_eq!(state.cursor, Index2::new(1, 0));
 
+        // Move up to "Hello World!" — desired 2 fits, lands on col 2.
         MoveUp(1).execute(&mut state);
         assert_eq!(state.cursor, Index2::new(0, 2));
 
+        // Already on first row — no change.
         MoveUp(1).execute(&mut state);
         assert_eq!(state.cursor, Index2::new(0, 2));
+    }
+
+    #[test]
+    fn test_move_down_preserves_desired_display_col() {
+        // After moving to a short line and then to a longer line,
+        // the cursor should restore to the original desired column.
+        // "Hello World!\n\n123.\nAnother longer line"
+        let mut state = EditorState::new(Lines::from("Hello World!\n\n123.\nAnother longer line"));
+        // Move right to col 6, which sets desired_display_col.
+        MoveForward(6).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 6));
+        assert_eq!(state.desired_display_col, 6);
+
+        // Move down to empty line — col 0.
+        MoveDown(1).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(1, 0));
+        // desired_display_col should still be 6.
+        assert_eq!(state.desired_display_col, 6);
+
+        // Move down to "123." — clamped to 3.
+        MoveDown(1).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(2, 3));
+        assert_eq!(state.desired_display_col, 6);
+
+        // Move down to "Another longer line" — back to col 6.
+        MoveDown(1).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(3, 6));
+        assert_eq!(state.desired_display_col, 6);
+    }
+
+    #[test]
+    fn test_move_up_preserves_desired_display_col() {
+        // Similar to above but moving upward.
+        let mut state = EditorState::new(Lines::from("Another longer line\n123.\n\nHello World!"));
+        state.cursor = Index2::new(3, 0);
+        MoveForward(6).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(3, 6));
+        assert_eq!(state.desired_display_col, 6);
+
+        // Move up to empty line — col 0.
+        MoveUp(1).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(2, 0));
+        assert_eq!(state.desired_display_col, 6);
+
+        // Move up to "123." — clamped to 3.
+        MoveUp(1).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(1, 3));
+        assert_eq!(state.desired_display_col, 6);
+
+        // Move up to "Another longer line" — back to col 6.
+        MoveUp(1).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 6));
+        assert_eq!(state.desired_display_col, 6);
+    }
+
+    #[test]
+    fn test_horizontal_move_resets_desired_display_col() {
+        let mut state = test_state();
+        MoveForward(6).execute(&mut state);
+        assert_eq!(state.desired_display_col, 6);
+
+        // Moving backward changes desired_display_col.
+        MoveBackward(2).execute(&mut state);
+        assert_eq!(state.desired_display_col, 4);
+        assert_eq!(state.cursor.col, 4);
     }
 
     #[test]

@@ -401,6 +401,25 @@ pub(crate) fn logical_col_to_display_col(
     display_w
 }
 
+/// Returns the display (visual/screen) column of a cursor at the given
+/// logical (row, col) position. Takes wrapping into account so it returns
+/// the horizontal offset within the visual line the cursor sits on.
+pub(crate) fn cursor_display_col(
+    lines: &Lines,
+    row: usize,
+    col: usize,
+    width: usize,
+    tab_width: usize,
+) -> usize {
+    let line = match lines.get(jagged::index::RowIndex::new(row)) {
+        Some(l) => l,
+        None => return 0,
+    };
+    let wrapped = LineWrapper::wrap_line(line, width, tab_width);
+    let visual_row = col_to_visual_row_in_wrapped(&wrapped, col);
+    logical_col_to_display_col(line, &wrapped, visual_row, col, tab_width)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
