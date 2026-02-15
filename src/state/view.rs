@@ -214,9 +214,27 @@ impl ViewState {
 
         // Scroll down: cursor is below the viewport.
         let viewport_visual_end = viewport_visual_start + height.saturating_sub(1);
-        if cursor_visual > viewport_visual_end {
+
+        // When the cursor is on the last visible row and its display column
+        // reaches (or exceeds) the content width, the cursor sits at the
+        // right edge and would be rendered off-screen. Treat it as already
+        // being on the next visual line so the viewport scrolls to show it.
+        let effective_cursor_visual = if cursor_visual == viewport_visual_end {
+            let display_col =
+                cursor_display_col(lines, cursor_row, cursor_col, width, self.tab_width);
+            if display_col >= width {
+                cursor_visual + 1
+            } else {
+                cursor_visual
+            }
+        } else {
+            cursor_visual
+        };
+
+        if effective_cursor_visual > viewport_visual_end {
             // The new viewport start should place the cursor on the last visible row.
-            let new_start_visual = cursor_visual.saturating_sub(height.saturating_sub(1));
+            let new_start_visual =
+                effective_cursor_visual.saturating_sub(height.saturating_sub(1));
             let (row, skip) = visual_line_to_logical(lines, width, self.tab_width, new_start_visual);
             self.viewport.y = row;
             self.viewport_visual_skip = skip;
@@ -662,6 +680,63 @@ mod tests {
         // Cursor at (0, 0) → visual line 0, which is before viewport visual start (2).
         view.ensure_cursor_visible_wrap(&lines, 4, 3, 0, 0);
         // Viewport should scroll up to visual line 0.
+        assert_eq!(view.viewport.y, 0);
+        assert_eq!(view.viewport_visual_skip, 0);
+    }
+
+    #[test]
+    fn test_ensure_cursor_visible_wrap_scroll_at_full_visual_line_edge() {
+        // "0123456789ab" at width 4 → 3 visual lines: ["0123", "4567", "89ab"].
+        // The last segment "89ab" is full (4 chars = width).
+        // Viewport height 3, shows visual lines 0,1,2. viewport_visual_end = 2.
+        // Cursor at (0, 12) = line.len(). cursor_visual maps to 2 (last segment fallback).
+        // cursor_display_col = 4 = width → at right edge → treat as visual 3 → scroll.
+        let lines = make_lines("0123456789ab");
+        let mut view = ViewState {
+            tab_width: 4,
+            ..Default::default()
+        };
+        view.viewport.y = 0;
+        view.viewport_visual_skip = 0;
+
+        view.ensure_cursor_visible_wrap(&lines, 4, 3, 0, 12);
+        // Viewport should scroll: new start = visual 1 → (row 0, skip 1).
+        assert_eq!(view.viewport.y, 0);
+        assert_eq!(view.viewport_visual_skip, 1);
+    }
+
+    #[test]
+    fn test_ensure_cursor_visible_wrap_no_scroll_at_partial_visual_line() {
+        // "0123456789" at width 4 → 3 visual lines: ["0123", "4567", "89"].
+        // The last segment "89" has only 2 chars — NOT full.
+        // Cursor at (0, 10) = line.len(). cursor_display_col = 2 < 4 → no scroll.
+        let lines = make_lines("0123456789");
+        let mut view = ViewState {
+            tab_width: 4,
+            ..Default::default()
+        };
+        view.viewport.y = 0;
+        view.viewport_visual_skip = 0;
+
+        view.ensure_cursor_visible_wrap(&lines, 4, 3, 0, 10);
+        // Viewport unchanged.
+        assert_eq!(view.viewport.y, 0);
+        assert_eq!(view.viewport_visual_skip, 0);
+    }
+
+    #[test]
+    fn test_ensure_cursor_visible_wrap_no_scroll_cursor_mid_line() {
+        // Cursor in the middle of the last visible line — should never scroll.
+        let lines = make_lines("0123456789ab");
+        let mut view = ViewState {
+            tab_width: 4,
+            ..Default::default()
+        };
+        view.viewport.y = 0;
+        view.viewport_visual_skip = 0;
+
+        // Cursor at (0, 10) → visual line 2, display col 2 < width 4. No scroll.
+        view.ensure_cursor_visible_wrap(&lines, 4, 3, 0, 10);
         assert_eq!(view.viewport.y, 0);
         assert_eq!(view.viewport_visual_skip, 0);
     }
