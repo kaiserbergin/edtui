@@ -25,29 +25,81 @@ impl LineWrapper {
         split_widths
     }
 
+    /// Wraps a line of characters into visual lines that fit within `max_width`.
+    /// Uses word-boundary-aware splitting that matches `wrap_spans` so that
+    /// cursor movement and rendering agree on where visual lines break.
     pub(crate) fn wrap_line(line: &[char], max_width: usize, tab_width: usize) -> Vec<Vec<char>> {
-        let mut lines = Vec::new();
-        let mut line_width = 0;
-        let mut current_line = Vec::new();
+        if line.is_empty() || max_width == 0 {
+            return vec![];
+        }
 
-        for &ch in line {
-            let char_width = char_width(ch, tab_width);
+        let mut result = Vec::new();
+        let mut start = 0;
 
-            if line_width + char_width > max_width {
-                lines.push(current_line.clone());
-                current_line.clear();
-                line_width = 0;
+        while start < line.len() {
+            let segment = &line[start..];
+
+            // Find how many characters fit within max_width.
+            let mut width = 0;
+            let mut fit_count = 0;
+            for &ch in segment {
+                let cw = char_width(ch, tab_width);
+                if width + cw > max_width {
+                    break;
+                }
+                width += cw;
+                fit_count += 1;
             }
 
-            current_line.push(ch);
-            line_width += char_width;
+            // All remaining characters fit — take them all.
+            if fit_count >= segment.len() {
+                result.push(segment.to_vec());
+                break;
+            }
+
+            // Need to split. At least 1 character must be taken.
+            if fit_count == 0 {
+                result.push(vec![segment[0]]);
+                start += 1;
+                continue;
+            }
+
+            // Try word-boundary split (same logic as get_split_at_word).
+            let split_at = Self::get_split_at_word_chars(segment, fit_count);
+
+            result.push(line[start..start + split_at].to_vec());
+            start += split_at;
         }
 
-        if !current_line.is_empty() {
-            lines.push(current_line);
+        result
+    }
+
+    /// Word-boundary-aware split for a slice of chars.
+    /// Given that `char_index` characters fit on the line, adjusts the split
+    /// point backward to the nearest whitespace boundary.
+    fn get_split_at_word_chars(chars: &[char], char_index: usize) -> usize {
+        if char_index == 0 {
+            return 0;
+        }
+        if char_index >= chars.len() {
+            return char_index;
         }
 
-        lines
+        // If the character just before the split is whitespace, split here.
+        if chars[char_index - 1].is_ascii_whitespace() {
+            return char_index;
+        }
+
+        // Search backward for whitespace.
+        for j in (0..char_index.saturating_sub(1)).rev() {
+            if chars[j].is_ascii_whitespace() {
+                // Split after the space (space stays with first part).
+                return j + 1;
+            }
+        }
+
+        // No whitespace found — force-split at the original position.
+        char_index
     }
 
     pub(crate) fn wrap_spans(
@@ -271,5 +323,50 @@ mod tests {
         // Should force-split the long word
         assert!(wrapped_spans.len() > 1);
         assert_eq!(wrapped_spans[0][0].content, "Supercalif");
+    }
+
+    #[test]
+    fn test_wrap_line_matches_wrap_spans_word_boundary() {
+        // wrap_line and wrap_spans must agree on where lines break so that
+        // cursor movement and rendering are in sync.
+        let text = "Hello World Test";
+        let chars: Vec<char> = text.chars().collect();
+        let wrapped_chars = LineWrapper::wrap_line(&chars, 7, 4);
+
+        // wrap_spans produces ["Hello ", "World ", "Test"]
+        let spans = vec![Span::raw(text)];
+        let wrapped_spans = LineWrapper::wrap_spans(spans, 7, 4);
+
+        // Same number of visual lines.
+        assert_eq!(wrapped_chars.len(), wrapped_spans.len());
+
+        // Same character content per visual line.
+        let chars_strs: Vec<String> = wrapped_chars
+            .iter()
+            .map(|v| v.iter().collect::<String>())
+            .collect();
+        let span_strs: Vec<String> = wrapped_spans
+            .iter()
+            .map(|line| line.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect();
+        assert_eq!(chars_strs, span_strs);
+    }
+
+    #[test]
+    fn test_wrap_line_long_word() {
+        let chars: Vec<char> = "Supercalifragilisticexpialidocious".chars().collect();
+        let wrapped = LineWrapper::wrap_line(&chars, 10, 4);
+
+        assert!(wrapped.len() > 1);
+        assert_eq!(
+            wrapped[0].iter().collect::<String>(),
+            "Supercalif"
+        );
+    }
+
+    #[test]
+    fn test_wrap_line_empty() {
+        let wrapped = LineWrapper::wrap_line(&[], 10, 4);
+        assert!(wrapped.is_empty());
     }
 }

@@ -49,6 +49,9 @@ name = "custom_keybindings"
 name = "system_editor"
 required-features = ["system-editor"]
 
+[[example]]
+name = "word_wrap_demo"
+
 [features]
 default = ["arboard", "mouse-support", "syntax-highlighting"]
 arboard = ["dep:arboard"]

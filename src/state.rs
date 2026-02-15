@@ -3,7 +3,7 @@ pub mod mode;
 mod search;
 pub mod selection;
 mod undo;
-mod view;
+pub(crate) mod view;
 
 use self::search::SearchState;
 use self::view::ViewState;

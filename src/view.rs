@@ -250,16 +250,16 @@ impl Widget for EditorView<'_, '_> {
         // of the cursor. Updates the view offset only if the cursor is out
         // side of the view port. The state is stored in the `ViewOffset`.
         let view_state = &mut self.state.view;
-        let (offset_x, offset_y) = if wrap_lines {
-            (
-                0,
-                view_state.update_viewport_vertical_wrap(width, height, cursor.row, lines),
-            )
+        let (offset_x, offset_y, offset_visual_skip) = if wrap_lines {
+            let (vy, vskip) =
+                view_state.update_viewport_vertical_wrap(width, height, cursor.row, cursor.col, lines);
+            (0, vy, vskip)
         } else {
             let line = lines.get(RowIndex::new(cursor.row));
             (
                 view_state.update_viewport_horizontal(width, cursor.col, line),
                 view_state.update_viewport_vertical(height, cursor.row),
+                0,
             )
         };
 
@@ -273,11 +273,12 @@ impl Widget for EditorView<'_, '_> {
         let mut cursor_position: Option<Position> = None;
         let mut content_area = content_main;
         let mut gutter_row_area = gutter_area;
-        let mut num_rendered_rows = 0;
+        let mut num_rendered_visual_rows: usize = 0;
 
         let line_numbers_enabled = line_numbers != LineNumbers::None;
         let is_relative = line_numbers == LineNumbers::Relative;
 
+        let mut is_first_line = true;
         let mut row_index = offset_y;
         for line in lines.iter_row().skip(row_index) {
             if content_area.height == 0 {
@@ -285,7 +286,15 @@ impl Widget for EditorView<'_, '_> {
             }
 
             let col_skips = offset_x;
-            num_rendered_rows += 1;
+
+            // For the first logical line when wrap is on, we may need to skip
+            // some visual lines (sub-line scrolling).
+            let visual_skip = if wrap_lines && is_first_line {
+                offset_visual_skip
+            } else {
+                0
+            };
+            is_first_line = false;
 
             let render_line = if wrap_lines {
                 let spans_no_sel = generate_spans_without_selection(
@@ -299,12 +308,33 @@ impl Widget for EditorView<'_, '_> {
                 let wrapped = LineWrapper::wrap_spans(spans_no_sel, width, tab_width);
                 let row_len = line.len();
                 let ranges = internal::selection_ranges_for_row(&selections, row_index, row_len);
-                let wrapped_with_sel = internal::apply_selection_to_wrapped_spans(
+                let mut wrapped_with_sel = internal::apply_selection_to_wrapped_spans(
                     &wrapped,
                     &ranges,
                     self.theme.selection_style,
                     col_skips,
                 );
+
+                // Determine the cursor position BEFORE slicing (using full wrapped content).
+                if row_index == cursor.row {
+                    let full_render = RenderLine::Wrapped(wrapped_with_sel.clone());
+                    let pos = full_render.data_coordinate_to_screen_coordinate(
+                        cursor.col.saturating_sub(offset_x),
+                        content_area,
+                        tab_width,
+                    );
+                    // Adjust for the skipped visual lines.
+                    cursor_position = Some(Position::new(
+                        pos.x,
+                        pos.y.saturating_sub(visual_skip as u16),
+                    ));
+                }
+
+                // Slice off the skipped visual lines for rendering.
+                if visual_skip > 0 && visual_skip < wrapped_with_sel.len() {
+                    wrapped_with_sel = wrapped_with_sel.split_off(visual_skip);
+                }
+
                 RenderLine::Wrapped(wrapped_with_sel)
             } else {
                 let spans = generate_spans(
@@ -319,6 +349,17 @@ impl Widget for EditorView<'_, '_> {
                 );
                 RenderLine::Single(spans)
             };
+
+            // For non-wrapped mode or when cursor wasn't handled above (non-wrap path).
+            if !wrap_lines && row_index == cursor.row {
+                cursor_position = Some(render_line.data_coordinate_to_screen_coordinate(
+                    cursor.col.saturating_sub(offset_x),
+                    content_area,
+                    tab_width,
+                ));
+            }
+
+            let visible_num_lines = render_line.num_lines();
 
             // Render line number in the gutter
             if line_numbers_enabled {
@@ -358,7 +399,7 @@ impl Widget for EditorView<'_, '_> {
                         line_num_area.width,
                     );
 
-                    let num_lines = render_line.num_lines() as u16;
+                    let num_lines = visible_num_lines as u16;
                     gutter_row_area = Some(Rect::new(
                         gutter.x,
                         gutter.y.saturating_add(num_lines),
@@ -368,22 +409,13 @@ impl Widget for EditorView<'_, '_> {
                 }
             }
 
-            // Determine the cursor position.
-            if row_index == cursor.row {
-                cursor_position = Some(render_line.data_coordinate_to_screen_coordinate(
-                    cursor.col.saturating_sub(offset_x),
-                    content_area,
-                    tab_width,
-                ));
-            }
-
-            // Render the current line.
+            // Render the current line and advance the content area.
             content_area = {
-                let num_lines = render_line.num_lines();
                 render_line.render(content_area, buf, tab_width);
-                rect_indent_y(content_area, num_lines)
+                rect_indent_y(content_area, visible_num_lines)
             };
 
+            num_rendered_visual_rows += visible_num_lines;
             row_index += 1;
         }
 
@@ -395,9 +427,9 @@ impl Widget for EditorView<'_, '_> {
             cell.set_style(self.theme.cursor_style);
         }
 
-        // Save the total number of lines that are currently displayed on the viewport.
+        // Save the total number of visual rows that are currently displayed on the viewport.
         // Required to handle scrolling.
-        self.state.view.update_num_rows(num_rendered_rows);
+        self.state.view.update_num_rows(num_rendered_visual_rows);
 
         // Render the status line (only when it has height, e.g. when in search mode for search-only line).
         if status.height > 0 {

@@ -3,6 +3,10 @@ use std::cmp::min;
 use crate::{
     helper::{find_matching_bracket, skip_empty_lines, skip_whitespace_for_selection},
     state::selection::set_selection_with_lines,
+    state::view::{
+        col_to_visual_row_in_wrapped, logical_col_to_display_col, visual_pos_to_logical_col,
+    },
+    view::line_wrapper::LineWrapper,
 };
 use jagged::Index2;
 
@@ -55,11 +59,19 @@ pub struct MoveUp(pub usize);
 
 impl Execute for MoveUp {
     fn execute(&mut self, state: &mut EditorState) {
+        let wrap = state.view.wrap;
+        let width = state.view.screen_area.width as usize;
+        let tab_width = state.view.tab_width;
+
         for _ in 0..self.0 {
-            if state.cursor.row == 0 {
-                break;
+            if wrap && width > 0 {
+                move_up_visual(state, width, tab_width);
+            } else {
+                if state.cursor.row == 0 {
+                    break;
+                }
+                state.cursor.row = state.cursor.row.saturating_sub(1);
             }
-            state.cursor.row = state.cursor.row.saturating_sub(1);
         }
         if state.mode == EditorMode::Visual {
             set_selection_with_lines(&mut state.selection, state.cursor, &state.lines);
@@ -72,15 +84,95 @@ pub struct MoveDown(pub usize);
 
 impl Execute for MoveDown {
     fn execute(&mut self, state: &mut EditorState) {
+        let wrap = state.view.wrap;
+        let width = state.view.screen_area.width as usize;
+        let tab_width = state.view.tab_width;
+
         for _ in 0..self.0 {
-            if state.cursor.row >= state.lines.len().saturating_sub(1) {
-                break;
+            if wrap && width > 0 {
+                move_down_visual(state, width, tab_width);
+            } else {
+                if state.cursor.row >= state.lines.len().saturating_sub(1) {
+                    break;
+                }
+                state.cursor.row += 1;
             }
-            state.cursor.row += 1;
         }
         if state.mode == EditorMode::Visual {
             set_selection_with_lines(&mut state.selection, state.cursor, &state.lines);
         }
+    }
+}
+
+/// Move cursor up by one visual (screen) line when wrap is on.
+fn move_up_visual(state: &mut EditorState, width: usize, tab_width: usize) {
+    let row = state.cursor.row;
+    let col = state.cursor.col;
+
+    let line = match state.lines.get(jagged::index::RowIndex::new(row)) {
+        Some(l) => l,
+        None => return,
+    };
+
+    let wrapped = LineWrapper::wrap_line(line, width, tab_width);
+    let visual_row = col_to_visual_row_in_wrapped(&wrapped, col);
+    let display_col = logical_col_to_display_col(line, &wrapped, visual_row, col, tab_width);
+
+    if visual_row > 0 {
+        // Move to the previous visual line within the same logical line.
+        let new_col = visual_pos_to_logical_col(&wrapped, visual_row - 1, display_col, tab_width);
+        state.cursor.col = new_col;
+    } else {
+        // Move to the last visual line of the previous logical line.
+        if row == 0 {
+            return;
+        }
+        let prev_row = row - 1;
+        let prev_line = match state.lines.get(jagged::index::RowIndex::new(prev_row)) {
+            Some(l) => l,
+            None => return,
+        };
+        let prev_wrapped = LineWrapper::wrap_line(prev_line, width, tab_width);
+        let last_visual = prev_wrapped.len().saturating_sub(1);
+        let new_col = visual_pos_to_logical_col(&prev_wrapped, last_visual, display_col, tab_width);
+        state.cursor.row = prev_row;
+        state.cursor.col = new_col;
+    }
+}
+
+/// Move cursor down by one visual (screen) line when wrap is on.
+fn move_down_visual(state: &mut EditorState, width: usize, tab_width: usize) {
+    let row = state.cursor.row;
+    let col = state.cursor.col;
+
+    let line = match state.lines.get(jagged::index::RowIndex::new(row)) {
+        Some(l) => l,
+        None => return,
+    };
+
+    let wrapped = LineWrapper::wrap_line(line, width, tab_width);
+    let visual_row = col_to_visual_row_in_wrapped(&wrapped, col);
+    let display_col = logical_col_to_display_col(line, &wrapped, visual_row, col, tab_width);
+    let total_visual = wrapped.len().max(1);
+
+    if visual_row + 1 < total_visual {
+        // Move to the next visual line within the same logical line.
+        let new_col = visual_pos_to_logical_col(&wrapped, visual_row + 1, display_col, tab_width);
+        state.cursor.col = new_col;
+    } else {
+        // Move to the first visual line of the next logical line.
+        if row >= state.lines.len().saturating_sub(1) {
+            return;
+        }
+        let next_row = row + 1;
+        let next_line = match state.lines.get(jagged::index::RowIndex::new(next_row)) {
+            Some(l) => l,
+            None => return,
+        };
+        let next_wrapped = LineWrapper::wrap_line(next_line, width, tab_width);
+        let new_col = visual_pos_to_logical_col(&next_wrapped, 0, display_col, tab_width);
+        state.cursor.row = next_row;
+        state.cursor.col = new_col;
     }
 }
 
@@ -359,8 +451,20 @@ pub struct MoveHalfPageDown();
 
 impl Execute for MoveHalfPageDown {
     fn execute(&mut self, state: &mut EditorState) {
-        let jump_rows = state.view.num_rows / 2;
-        state.cursor.row = min(state.cursor.row + jump_rows, state.lines.last_row_index());
+        if state.view.wrap {
+            let jump_visual = state.view.num_rows / 2;
+            for _ in 0..jump_visual {
+                let width = state.view.screen_area.width as usize;
+                let tab_width = state.view.tab_width;
+                if width == 0 {
+                    break;
+                }
+                move_down_visual(state, width, tab_width);
+            }
+        } else {
+            let jump_rows = state.view.num_rows / 2;
+            state.cursor.row = min(state.cursor.row + jump_rows, state.lines.last_row_index());
+        }
 
         if state.mode == EditorMode::Visual {
             set_selection_with_lines(&mut state.selection, state.cursor, &state.lines);
@@ -373,8 +477,20 @@ pub struct MoveHalfPageUp();
 
 impl Execute for MoveHalfPageUp {
     fn execute(&mut self, state: &mut EditorState) {
-        let jump_rows = state.view.num_rows / 2;
-        state.cursor.row = state.cursor.row.saturating_sub(jump_rows);
+        if state.view.wrap {
+            let jump_visual = state.view.num_rows / 2;
+            for _ in 0..jump_visual {
+                let width = state.view.screen_area.width as usize;
+                let tab_width = state.view.tab_width;
+                if width == 0 {
+                    break;
+                }
+                move_up_visual(state, width, tab_width);
+            }
+        } else {
+            let jump_rows = state.view.num_rows / 2;
+            state.cursor.row = state.cursor.row.saturating_sub(jump_rows);
+        }
 
         if state.mode == EditorMode::Visual {
             set_selection_with_lines(&mut state.selection, state.cursor, &state.lines);
