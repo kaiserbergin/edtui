@@ -426,7 +426,7 @@ mod tests {
 
     use super::*;
     fn test_state() -> EditorState {
-        EditorState::new(Lines::from("Hello World!\n\n123. \n  3 \n0\n"))
+        EditorState::new(Lines::from("Hello World!\n\n123."))
     }
 
     fn test_state_advanced() -> EditorState {
