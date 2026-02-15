@@ -156,6 +156,32 @@ impl KeyEventHandler {
             _ => None,
         }
     }
+
+    /// Returns true if any insert-mode binding in the register has a key sequence
+    /// that starts with the given key (used to decide whether to buffer in insert mode).
+    fn has_insert_sequence_starting_with(&self, key: &KeyInput) -> bool {
+        self.register.keys().any(|k| {
+            k.mode == EditorMode::Insert && !k.keys.is_empty() && k.keys[0] == *key
+        })
+    }
+
+    /// Inserts all buffered keys in the lookup as characters and clears the lookup.
+    /// Used when an insert-mode sequence does not match or is cancelled (e.g. by Esc).
+    fn flush_insert_lookup(&mut self, state: &mut EditorState) {
+        for key in self.lookup.drain(..) {
+            if let input::KeyCode::Char(c) = key.key {
+                if self.capture_on_insert {
+                    state.capture();
+                }
+                InsertChar(c).execute(state);
+            } else if matches!(key.key, input::KeyCode::Tab) {
+                if self.capture_on_insert {
+                    state.capture();
+                }
+                InsertChar('\t').execute(state);
+            }
+        }
+    }
 }
 
 fn key_input_is_digit(k: &KeyInput) -> bool {
@@ -264,12 +290,45 @@ impl KeyEventHandler {
         let mode = state.mode;
         let key_input = key.into();
 
-        // Always insert characters in insert mode
+        // Insert mode: support key sequences (e.g. jj -> Normal) and flush on non-char keys
         if mode == EditorMode::Insert {
+            let is_char_or_tab = matches!(key_input.key, input::KeyCode::Char(_) | input::KeyCode::Tab)
+                && (key_input.modifiers == input::Modifiers::NONE
+                    || key_input.modifiers == input::Modifiers::SHIFT);
+
+            if !self.lookup.is_empty() && !is_char_or_tab {
+                self.flush_insert_lookup(state);
+            }
+
             if let input::KeyCode::Char(c) = key_input.key {
                 if key_input.modifiers == input::Modifiers::NONE
                     || key_input.modifiers == input::Modifiers::SHIFT
                 {
+                    if self.has_insert_sequence_starting_with(&key_input) || !self.lookup.is_empty() {
+                        let saved = self.lookup.clone();
+                        if let Some(mut action) = self.get(key_input, EditorMode::Insert) {
+                            action.execute(state);
+                            return;
+                        }
+                        // get() returned None: either no match (lookup cleared) or partial match (still waiting)
+                        if self.lookup.is_empty() {
+                            // No match - insert buffered keys and current character
+                            for k in &saved {
+                                if let input::KeyCode::Char(ch) = k.key {
+                                    if self.capture_on_insert {
+                                        state.capture();
+                                    }
+                                    InsertChar(ch).execute(state);
+                                }
+                            }
+                            if self.capture_on_insert {
+                                state.capture();
+                            }
+                            InsertChar(c).execute(state);
+                        }
+                        // else: partial match (e.g. first 'j' of "jj") - don't insert, wait for next key
+                        return;
+                    }
                     if self.capture_on_insert {
                         state.capture();
                     }
@@ -409,5 +468,129 @@ mod tests {
         state4.mode = crate::EditorMode::Insert;
         let mut wordstar = KeyEventHandler::wordstar_mode();
         wordstar.on_event(KeyInput::new(KeyCode::Right), &mut state4);
+    }
+
+    // --- jj insert-mode escape and $ / ^ bindings ---
+
+    #[test]
+    fn test_vim_jj_in_insert_switches_to_normal_without_inserting() {
+        use crate::{EditorState, Index2, Lines};
+
+        let mut state = EditorState::new(Lines::from("ab"));
+        state.mode = EditorMode::Insert;
+        state.cursor = Index2::new(0, 2);
+
+        let mut handler = KeyEventHandler::vim_mode();
+        handler.on_event(KeyInput::new('j'), &mut state);
+        assert_eq!(state.mode, EditorMode::Insert);
+        assert_eq!(state.lines.to_string(), "ab");
+
+        handler.on_event(KeyInput::new('j'), &mut state);
+        assert_eq!(state.mode, EditorMode::Normal);
+        assert_eq!(state.lines.to_string(), "ab");
+    }
+
+    #[test]
+    fn test_vim_j_then_other_char_in_insert_inserts_both() {
+        use crate::EditorState;
+
+        let mut state = EditorState::default();
+        state.mode = EditorMode::Insert;
+
+        let mut handler = KeyEventHandler::vim_mode();
+        handler.on_event(KeyInput::new('j'), &mut state);
+        handler.on_event(KeyInput::new('k'), &mut state);
+
+        assert_eq!(state.lines.to_string(), "jk");
+        assert_eq!(state.mode, EditorMode::Insert);
+    }
+
+    #[test]
+    fn test_vim_j_then_esc_in_insert_inserts_j_then_normal() {
+        use crate::EditorState;
+
+        let mut state = EditorState::default();
+        state.mode = EditorMode::Insert;
+
+        let mut handler = KeyEventHandler::vim_mode();
+        handler.on_event(KeyInput::new('j'), &mut state);
+        handler.on_event(KeyInput::new(KeyCode::Esc), &mut state);
+
+        assert_eq!(state.lines.to_string(), "j");
+        assert_eq!(state.mode, EditorMode::Normal);
+    }
+
+    #[test]
+    fn test_vim_single_j_then_space_in_insert_inserts_j_space() {
+        use crate::EditorState;
+
+        let mut state = EditorState::default();
+        state.mode = EditorMode::Insert;
+
+        let mut handler = KeyEventHandler::vim_mode();
+        handler.on_event(KeyInput::new('j'), &mut state);
+        handler.on_event(KeyInput::new(' '), &mut state);
+
+        assert_eq!(state.lines.to_string(), "j ");
+        assert_eq!(state.mode, EditorMode::Insert);
+    }
+
+    #[test]
+    fn test_vim_dollar_normal_mode_moves_to_end_of_line() {
+        use crate::{EditorState, Index2, Lines};
+
+        let mut state = EditorState::new(Lines::from("abc"));
+        state.mode = EditorMode::Normal;
+        state.cursor = Index2::new(0, 0);
+
+        let mut handler = KeyEventHandler::vim_mode();
+        handler.on_event(KeyInput::shift('$'), &mut state);
+
+        assert_eq!(state.cursor, Index2::new(0, 2));
+        assert_eq!(state.mode, EditorMode::Normal);
+    }
+
+    #[test]
+    fn test_vim_caret_normal_mode_moves_to_first_non_whitespace() {
+        use crate::{EditorState, Index2, Lines};
+
+        let mut state = EditorState::new(Lines::from("  xy"));
+        state.mode = EditorMode::Normal;
+        state.cursor = Index2::new(0, 3);
+
+        let mut handler = KeyEventHandler::vim_mode();
+        handler.on_event(KeyInput::shift('^'), &mut state);
+
+        assert_eq!(state.cursor, Index2::new(0, 2));
+        assert_eq!(state.mode, EditorMode::Normal);
+    }
+
+    #[test]
+    fn test_vim_dollar_visual_mode_moves_to_end_of_line() {
+        use crate::{EditorState, Index2, Lines};
+
+        let mut state = EditorState::new(Lines::from("hello"));
+        state.mode = EditorMode::Visual;
+        state.cursor = Index2::new(0, 1);
+
+        let mut handler = KeyEventHandler::vim_mode();
+        handler.on_event(KeyInput::shift('$'), &mut state);
+
+        // Visual mode uses insert-style max_col: end of "hello" is col 5 (one past last char)
+        assert_eq!(state.cursor, Index2::new(0, 5));
+    }
+
+    #[test]
+    fn test_vim_caret_visual_mode_moves_to_first_non_whitespace() {
+        use crate::{EditorState, Index2, Lines};
+
+        let mut state = EditorState::new(Lines::from("   ab"));
+        state.mode = EditorMode::Visual;
+        state.cursor = Index2::new(0, 4);
+
+        let mut handler = KeyEventHandler::vim_mode();
+        handler.on_event(KeyInput::shift('^'), &mut state);
+
+        assert_eq!(state.cursor, Index2::new(0, 3));
     }
 }

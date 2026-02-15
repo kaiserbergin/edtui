@@ -30,6 +30,10 @@ pub fn key_bindings() -> HashMap<KeyEventRegister, Action> {
             SwitchMode(EditorMode::Normal).into(),
         ),
         (
+            KeyEventRegister::i(vec![KeyInput::new('j'), KeyInput::new('j')]),
+            SwitchMode(EditorMode::Normal).into(),
+        ),
+        (
             KeyEventRegister::v(vec![KeyInput::new(KeyCode::Esc)]),
             SwitchMode(EditorMode::Normal).into(),
         ),
@@ -197,8 +201,12 @@ pub fn key_bindings() -> HashMap<KeyEventRegister, Action> {
             MoveToFirst().into(),
         ),
         (
-            KeyEventRegister::n(vec![KeyInput::new('$')]),
+            KeyEventRegister::n(vec![KeyInput::shift('$')]),
             MoveToEndOfLine().into(),
+        ),
+        (
+            KeyEventRegister::n(vec![KeyInput::shift('^')]),
+            MoveToFirst().into(),
         ),
         (
             KeyEventRegister::v(vec![KeyInput::new('0')]),
@@ -209,8 +217,12 @@ pub fn key_bindings() -> HashMap<KeyEventRegister, Action> {
             MoveToFirst().into(),
         ),
         (
-            KeyEventRegister::v(vec![KeyInput::new('$')]),
+            KeyEventRegister::v(vec![KeyInput::shift('$')]),
             MoveToEndOfLine().into(),
+        ),
+        (
+            KeyEventRegister::v(vec![KeyInput::shift('^')]),
+            MoveToFirst().into(),
         ),
         (
             KeyEventRegister::n(vec![KeyInput::ctrl('d')]),
