@@ -133,7 +133,31 @@ flowchart TB
 
 ---
 
-## 7. Unicode and Lengths (features/wp)
+## 7. Cursor and Viewport
+
+Same as main: cursor and viewport use **logical** coordinates; viewport is updated so the cursor stays visible, and the cursor is drawn by mapping logical position to screen position (including in wrapped mode).
+
+```mermaid
+flowchart TB
+    Cursor["Cursor (row, col) in logical space"]
+    Viewport["ViewState.viewport (x, y)"]
+    
+    Cursor --> Update["update_viewport_horizontal / _vertical / _vertical_wrap"]
+    Update --> Viewport
+    
+    Viewport --> Iter["Iterate lines from offset_y, col_skips = offset_x"]
+    Iter --> RenderLine["Build RenderLine per logical line"]
+    RenderLine --> ScreenPos["data_coordinate_to_screen_coordinate(cursor.col - offset_x, ...)"]
+    ScreenPos --> Draw["Draw cursor at Position"]
+```
+
+- **Scroll:** Viewport is updated so the cursor stays visible (scroll left/right without wrap, or scroll up/down by logical line with wrap). The logic lives in `state/view.rs` and is unchanged on features/wp.
+- **Cursor draw:** For the logical line that contains the cursor, we call `render_line.data_coordinate_to_screen_coordinate(cursor.col - offset_x, area, tab_width)`. For wrapped mode this uses **`find_position_in_wrapped_spans`** (logical column → wrapped row + display width col). The wrap-first pipeline does not change this: we still build a `RenderLine` per logical line and use it for both rendering and cursor position.
+- **No wrap vs wrap:** With wrap off, one logical line = one screen row and `offset_x` is the horizontal scroll. With wrap on, `offset_x` is 0 and `offset_y` is the first visible **logical** line; cursor position is computed from the same `RenderLine::Wrapped` data that was just rendered.
+
+---
+
+## 8. Unicode and Lengths (features/wp)
 
 ```mermaid
 flowchart LR
@@ -153,7 +177,7 @@ flowchart LR
 
 ---
 
-## 8. Summary Diagram (features/wp)
+## 9. Summary Diagram (features/wp)
 
 ```mermaid
 flowchart TB
