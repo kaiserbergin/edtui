@@ -2,7 +2,10 @@ use jagged::index::RowIndex;
 
 use super::{delete::delete_selection, motion::CharacterClass, motion::MoveWordForward, Execute};
 use crate::{
-    clipboard::ClipboardTrait, state::selection::Selection, EditorMode, EditorState, Index2, Lines,
+    clipboard::ClipboardTrait,
+    state::selection::Selection,
+    state::view::cursor_visual_line_range,
+    EditorMode, EditorState, Index2, Lines,
 };
 
 /// Selects text between specified delimiter characters.
@@ -284,9 +287,27 @@ pub struct SelectLine;
 impl Execute for SelectLine {
     fn execute(&mut self, state: &mut EditorState) {
         let row = state.cursor.row;
+        let wrap = state.view.wrap && state.view.screen_area.width > 0;
         if let Some(len_col) = state.lines.len_col(row) {
-            let start = Index2::new(row, 0);
-            let end = Index2::new(row, len_col.saturating_sub(1));
+            let (start_col, end_col) = if wrap {
+                let width = state.view.screen_area.width as usize;
+                let tab_width = state.view.tab_width;
+                let (col_start, col_end) = cursor_visual_line_range(
+                    &state.lines,
+                    row,
+                    state.cursor.col,
+                    width,
+                    tab_width,
+                );
+                (
+                    col_start,
+                    col_end.saturating_sub(1).min(len_col.saturating_sub(1)),
+                )
+            } else {
+                (0, len_col.saturating_sub(1))
+            };
+            let start = Index2::new(row, start_col);
+            let end = Index2::new(row, end_col);
             state.selection = Some(Selection::new(start, end).line_mode());
             state.mode = EditorMode::Visual;
         }
@@ -314,6 +335,62 @@ mod tests {
     use super::*;
     fn test_state() -> EditorState {
         EditorState::new(Lines::from("Hello World!\n\n123."))
+    }
+
+    fn wrap_state(text: &str, width: u16) -> EditorState {
+        use ratatui_core::layout::Rect;
+        let mut state = EditorState::new(Lines::from(text));
+        state.view.screen_area = Rect { x: 0, y: 0, width, height: 20 };
+        state
+    }
+
+    #[test]
+    fn test_select_line_wrap_single_visual_row() {
+        // "Hello" at width 20: single visual row → same as no-wrap.
+        let mut state = wrap_state("Hello", 20);
+        state.cursor = Index2::new(0, 2);
+        SelectLine.execute(&mut state);
+        let selection = state.selection.unwrap();
+        assert_eq!(selection.start, Index2::new(0, 0));
+        assert_eq!(selection.end, Index2::new(0, 4));
+        assert!(selection.line_mode);
+    }
+
+    #[test]
+    fn test_select_line_wrap_first_visual_row() {
+        // "0123456789" at width 4 → ["0123", "4567", "89"].
+        // Cursor at col 1 (first visual row) → select [0, 3].
+        let mut state = wrap_state("0123456789", 4);
+        state.cursor = Index2::new(0, 1);
+        SelectLine.execute(&mut state);
+        let selection = state.selection.unwrap();
+        assert_eq!(selection.start, Index2::new(0, 0));
+        assert_eq!(selection.end, Index2::new(0, 3));
+        assert!(selection.line_mode);
+    }
+
+    #[test]
+    fn test_select_line_wrap_second_visual_row() {
+        // Cursor at col 5 (second visual row "4567") → select [4, 7].
+        let mut state = wrap_state("0123456789", 4);
+        state.cursor = Index2::new(0, 5);
+        SelectLine.execute(&mut state);
+        let selection = state.selection.unwrap();
+        assert_eq!(selection.start, Index2::new(0, 4));
+        assert_eq!(selection.end, Index2::new(0, 7));
+        assert!(selection.line_mode);
+    }
+
+    #[test]
+    fn test_select_line_wrap_last_visual_row() {
+        // Cursor at col 8 (last visual row "89") → select [8, 9].
+        let mut state = wrap_state("0123456789", 4);
+        state.cursor = Index2::new(0, 8);
+        SelectLine.execute(&mut state);
+        let selection = state.selection.unwrap();
+        assert_eq!(selection.start, Index2::new(0, 8));
+        assert_eq!(selection.end, Index2::new(0, 9));
+        assert!(selection.line_mode);
     }
 
     #[test]

@@ -124,8 +124,13 @@ impl KeyEventHandler {
             }
         }
 
-        // Incomplete count: all digits, or [d]/[c] followed by only digits — wait for more input
-        if lookup.iter().all(key_input_is_digit) {
+        // Incomplete count: all digits starting with a non-zero digit, or [d]/[c] followed by
+        // only digits — wait for more input. A leading '0' is never a count prefix in vim; it is
+        // the "move to start of line" command and must fall through to the register lookup.
+        let starts_with_nonzero_digit = lookup
+            .first()
+            .map_or(false, |k| matches!(k.key, input::KeyCode::Char(c) if c.is_ascii_digit() && c != '0'));
+        if lookup.iter().all(key_input_is_digit) && starts_with_nonzero_digit {
             return None;
         }
         if lookup.len() >= 2 {
@@ -578,6 +583,37 @@ mod tests {
 
         // Visual mode uses insert-style max_col: end of "hello" is col 5 (one past last char)
         assert_eq!(state.cursor, Index2::new(0, 5));
+    }
+
+    #[test]
+    fn test_vim_zero_moves_to_start_of_line() {
+        use crate::{EditorState, Index2, Lines};
+
+        let mut state = EditorState::new(Lines::from("Hello"));
+        state.mode = EditorMode::Normal;
+        state.cursor = Index2::new(0, 3);
+
+        let mut handler = KeyEventHandler::vim_mode();
+        handler.on_event(KeyInput::new('0'), &mut state);
+
+        assert_eq!(state.cursor, Index2::new(0, 0));
+        assert_eq!(state.mode, EditorMode::Normal);
+    }
+
+    #[test]
+    fn test_vim_count_prefix_with_nonzero_digit() {
+        use crate::{EditorState, Index2, Lines};
+
+        // 3l should move forward 3 columns
+        let mut state = EditorState::new(Lines::from("Hello World"));
+        state.mode = EditorMode::Normal;
+        state.cursor = Index2::new(0, 0);
+
+        let mut handler = KeyEventHandler::vim_mode();
+        handler.on_event(KeyInput::new('3'), &mut state);
+        handler.on_event(KeyInput::new('l'), &mut state);
+
+        assert_eq!(state.cursor, Index2::new(0, 3));
     }
 
     #[test]

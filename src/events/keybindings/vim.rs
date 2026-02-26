@@ -355,6 +355,11 @@ pub fn key_bindings() -> HashMap<KeyEventRegister, Action> {
             KeyEventRegister::n(vec![KeyInput::shift('D')]),
             DeleteToEndOfLine.into(),
         ),
+        // Change to end of line (delete to end, enter insert mode)
+        (
+            KeyEventRegister::n(vec![KeyInput::shift('C')]),
+            SwitchMode(EditorMode::Insert).chain(DeleteToEndOfLine).into(),
+        ),
         // Delete the current selection
         (
             KeyEventRegister::v(vec![KeyInput::new('d')]),

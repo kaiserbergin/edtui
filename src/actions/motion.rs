@@ -4,7 +4,7 @@ use crate::{
     helper::{find_matching_bracket, skip_empty_lines, skip_whitespace_for_selection},
     state::selection::set_selection_with_lines,
     state::view::{
-        col_to_visual_row_in_wrapped, visual_pos_to_logical_col,
+        col_to_visual_row_in_wrapped, cursor_visual_line_range, visual_pos_to_logical_col,
     },
     view::line_wrapper::LineWrapper,
 };
@@ -426,7 +426,21 @@ pub struct MoveToStartOfLine();
 
 impl Execute for MoveToStartOfLine {
     fn execute(&mut self, state: &mut EditorState) {
-        state.cursor.col = 0;
+        let wrap = state.view.wrap && state.view.screen_area.width > 0;
+        if wrap {
+            let width = state.view.screen_area.width as usize;
+            let tab_width = state.view.tab_width;
+            let (col_start, _) = cursor_visual_line_range(
+                &state.lines,
+                state.cursor.row,
+                state.cursor.col,
+                width,
+                tab_width,
+            );
+            state.cursor.col = col_start;
+        } else {
+            state.cursor.col = 0;
+        }
         state.update_desired_display_col();
 
         if state.mode == EditorMode::Visual {
@@ -434,14 +448,40 @@ impl Execute for MoveToStartOfLine {
         }
     }
 }
-// move to the first non-whitespace character in the line.
+
+// Move to the first non-whitespace character in the line (or visual line when wrapped).
 #[derive(Clone, Debug, Copy)]
 pub struct MoveToFirst();
 
 impl Execute for MoveToFirst {
     fn execute(&mut self, state: &mut EditorState) {
-        state.cursor.col = 0;
-        skip_whitespace(&state.lines, &mut state.cursor);
+        let wrap = state.view.wrap && state.view.screen_area.width > 0;
+        if wrap {
+            let width = state.view.screen_area.width as usize;
+            let tab_width = state.view.tab_width;
+            let (col_start, col_end) = cursor_visual_line_range(
+                &state.lines,
+                state.cursor.row,
+                state.cursor.col,
+                width,
+                tab_width,
+            );
+            let first_non_ws = state
+                .lines
+                .get(jagged::index::RowIndex::new(state.cursor.row))
+                .and_then(|line| {
+                    let end = col_end.min(line.len());
+                    line[col_start..end]
+                        .iter()
+                        .position(|c| !c.is_whitespace())
+                        .map(|p| col_start + p)
+                })
+                .unwrap_or(col_start);
+            state.cursor.col = first_non_ws;
+        } else {
+            state.cursor.col = 0;
+            skip_whitespace(&state.lines, &mut state.cursor);
+        }
         state.update_desired_display_col();
 
         if state.mode == EditorMode::Visual {
@@ -450,13 +490,32 @@ impl Execute for MoveToFirst {
     }
 }
 
-// Move the cursor to the end of the line.
+// Move the cursor to the end of the line (or visual line when wrapped).
 #[derive(Clone, Debug, Copy)]
 pub struct MoveToEndOfLine();
 
 impl Execute for MoveToEndOfLine {
     fn execute(&mut self, state: &mut EditorState) {
-        state.cursor.col = max_col(&state.lines, &state.cursor, state.mode);
+        let wrap = state.view.wrap && state.view.screen_area.width > 0;
+        if wrap {
+            let width = state.view.screen_area.width as usize;
+            let tab_width = state.view.tab_width;
+            let (_, col_end) = cursor_visual_line_range(
+                &state.lines,
+                state.cursor.row,
+                state.cursor.col,
+                width,
+                tab_width,
+            );
+            let max = max_col(&state.lines, &state.cursor, state.mode);
+            state.cursor.col = if state.mode == EditorMode::Insert {
+                col_end.min(max)
+            } else {
+                col_end.saturating_sub(1).min(max)
+            };
+        } else {
+            state.cursor.col = max_col(&state.lines, &state.cursor, state.mode);
+        }
         state.update_desired_display_col();
 
         if state.mode == EditorMode::Visual {
@@ -958,5 +1017,109 @@ mod tests {
 
         MoveToFirst().execute(&mut state);
         assert_eq!(state.cursor, Index2::new(0, 1));
+    }
+
+    // ---- wrap-aware motion tests ----
+
+    fn wrap_state(text: &str, width: u16) -> EditorState {
+        use ratatui_core::layout::Rect;
+        let mut state = EditorState::new(Lines::from(text));
+        state.view.screen_area = Rect { x: 0, y: 0, width, height: 20 };
+        state
+    }
+
+    #[test]
+    fn test_move_to_end_wrap_first_visual_row() {
+        // "0123456789" at width 4 → ["0123", "4567", "89"]
+        // Cursor at col 1 (first visual row) → end of first row = col 3.
+        let mut state = wrap_state("0123456789", 4);
+        state.cursor = Index2::new(0, 1);
+        MoveToEndOfLine().execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 3));
+    }
+
+    #[test]
+    fn test_move_to_end_wrap_second_visual_row() {
+        // Cursor at col 5 (second visual row ["4567"]) → end = col 7.
+        let mut state = wrap_state("0123456789", 4);
+        state.cursor = Index2::new(0, 5);
+        MoveToEndOfLine().execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 7));
+    }
+
+    #[test]
+    fn test_move_to_end_wrap_last_visual_row() {
+        // Cursor at col 8 (last visual row ["89"]) → end = col 9.
+        let mut state = wrap_state("0123456789", 4);
+        state.cursor = Index2::new(0, 8);
+        MoveToEndOfLine().execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 9));
+    }
+
+    #[test]
+    fn test_move_to_start_wrap_first_visual_row() {
+        // Cursor at col 2 (first visual row) → start = col 0.
+        let mut state = wrap_state("0123456789", 4);
+        state.cursor = Index2::new(0, 2);
+        MoveToStartOfLine().execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 0));
+    }
+
+    #[test]
+    fn test_move_to_start_wrap_second_visual_row() {
+        // Cursor at col 5 (second visual row) → start = col 4.
+        let mut state = wrap_state("0123456789", 4);
+        state.cursor = Index2::new(0, 5);
+        MoveToStartOfLine().execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 4));
+    }
+
+    #[test]
+    fn test_move_to_start_wrap_last_visual_row() {
+        // Cursor at col 9 (last visual row) → start = col 8.
+        let mut state = wrap_state("0123456789", 4);
+        state.cursor = Index2::new(0, 9);
+        MoveToStartOfLine().execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 8));
+    }
+
+    #[test]
+    fn test_move_to_first_wrap_skip_whitespace_within_visual_row() {
+        // "  ab  cd  " at width 6 → ["  ab  ", "cd  "]
+        // Cursor at col 8 (second visual row "cd  ") → first non-ws = col 6.
+        let mut state = wrap_state("  ab  cd  ", 6);
+        state.cursor = Index2::new(0, 8);
+        MoveToFirst().execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 6));
+    }
+
+    #[test]
+    fn test_move_to_first_wrap_all_whitespace_visual_row() {
+        // Cursor on a visual row that is all whitespace → stay at col_start.
+        // "    xy" at width 4 → ["    ", "xy"] — first row is all spaces.
+        let mut state = wrap_state("    xy", 4);
+        state.cursor = Index2::new(0, 2); // on first visual row "    "
+        MoveToFirst().execute(&mut state);
+        // All whitespace on this visual row → stays at col_start = 0.
+        assert_eq!(state.cursor, Index2::new(0, 0));
+    }
+
+    #[test]
+    fn test_move_to_end_no_wrap_unchanged() {
+        // Wrap disabled: behavior unchanged.
+        let mut state = EditorState::new(Lines::from("Hello World!"));
+        state.view.wrap = false;
+        state.cursor = Index2::new(0, 2);
+        MoveToEndOfLine().execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 11));
+    }
+
+    #[test]
+    fn test_move_to_start_no_wrap_unchanged() {
+        let mut state = EditorState::new(Lines::from("Hello World!"));
+        state.view.wrap = false;
+        state.cursor = Index2::new(0, 5);
+        MoveToStartOfLine().execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 0));
     }
 }

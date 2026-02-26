@@ -419,6 +419,28 @@ pub(crate) fn logical_col_to_display_col(
     display_w
 }
 
+/// Returns the logical column range `(col_start, col_end)` for the visual line
+/// that the cursor at `(row, col)` is on. `col_end` is exclusive (one past the
+/// last char of the visual line). Returns `(0, 0)` when the row does not exist.
+pub(crate) fn cursor_visual_line_range(
+    lines: &Lines,
+    row: usize,
+    col: usize,
+    width: usize,
+    tab_width: usize,
+) -> (usize, usize) {
+    let line = match lines.get(jagged::index::RowIndex::new(row)) {
+        Some(l) => l,
+        None => return (0, 0),
+    };
+    let wrapped = LineWrapper::wrap_line(line, width, tab_width);
+    if wrapped.is_empty() {
+        return (0, 0);
+    }
+    let visual_row = col_to_visual_row_in_wrapped(&wrapped, col);
+    visual_row_col_range(&wrapped, visual_row)
+}
+
 /// Returns the display (visual/screen) column of a cursor at the given
 /// logical (row, col) position. Takes wrapping into account so it returns
 /// the horizontal offset within the visual line the cursor sits on.
@@ -722,6 +744,47 @@ mod tests {
         // Viewport unchanged.
         assert_eq!(view.viewport.y, 0);
         assert_eq!(view.viewport_visual_skip, 0);
+    }
+
+    #[test]
+    fn test_cursor_visual_line_range_single_row() {
+        // "Hello" at width 80 → 1 visual row → range is (0, 5).
+        let lines = make_lines("Hello");
+        assert_eq!(cursor_visual_line_range(&lines, 0, 2, 80, 4), (0, 5));
+    }
+
+    #[test]
+    fn test_cursor_visual_line_range_multi_row_first() {
+        // "0123456789" at width 4 → ["0123", "4567", "89"].
+        // Cursor at col 2 (first visual row) → (0, 4).
+        let lines = make_lines("0123456789");
+        assert_eq!(cursor_visual_line_range(&lines, 0, 2, 4, 4), (0, 4));
+    }
+
+    #[test]
+    fn test_cursor_visual_line_range_multi_row_second() {
+        // Cursor at col 5 (second visual row) → (4, 8).
+        let lines = make_lines("0123456789");
+        assert_eq!(cursor_visual_line_range(&lines, 0, 5, 4, 4), (4, 8));
+    }
+
+    #[test]
+    fn test_cursor_visual_line_range_multi_row_last() {
+        // Cursor at col 9 (third visual row) → (8, 10).
+        let lines = make_lines("0123456789");
+        assert_eq!(cursor_visual_line_range(&lines, 0, 9, 4, 4), (8, 10));
+    }
+
+    #[test]
+    fn test_cursor_visual_line_range_empty_line() {
+        let lines = make_lines("");
+        assert_eq!(cursor_visual_line_range(&lines, 0, 0, 80, 4), (0, 0));
+    }
+
+    #[test]
+    fn test_cursor_visual_line_range_invalid_row() {
+        let lines = make_lines("Hello");
+        assert_eq!(cursor_visual_line_range(&lines, 99, 0, 80, 4), (0, 0));
     }
 
     #[test]

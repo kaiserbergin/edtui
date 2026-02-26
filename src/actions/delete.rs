@@ -5,6 +5,7 @@ use crate::{
     clipboard::ClipboardTrait,
     helper::{is_out_of_bounds, max_col_insert},
     state::selection::Selection,
+    state::view::{cursor_visual_line_range, visual_line_count_for_row},
     EditorState, Index2, Lines,
 };
 
@@ -67,6 +68,7 @@ impl Execute for DeleteChar {
         for _ in 0..self.0 {
             delete_char(&mut state.lines, &mut state.cursor);
         }
+        state.update_desired_display_col();
     }
 }
 
@@ -114,6 +116,7 @@ impl Execute for DeleteCharForward {
         for _ in 0..self.0 {
             delete_char_forward(&mut state.lines, &mut state.cursor);
         }
+        state.update_desired_display_col();
     }
 }
 
@@ -137,27 +140,62 @@ fn delete_char_forward(lines: &mut Lines, index: &mut Index2) {
     let _ = lines.remove(*index);
 }
 
-/// Deletes the current line.
+/// Deletes the current line (or current visual line when wrap is on).
 #[derive(Clone, Debug, Copy)]
 pub struct DeleteLine(pub usize);
 
 impl Execute for DeleteLine {
     fn execute(&mut self, state: &mut EditorState) {
         state.capture();
+        let wrap = state.view.wrap && state.view.screen_area.width > 0;
         for _ in 0..self.0 {
             if state.cursor.row >= state.lines.len() {
                 break;
             }
-            let row_index = RowIndex::new(state.cursor.row);
-            let deleted_line = state.lines.remove(row_index).iter().collect::<String>();
-            state.clip.set_text(String::from('\n') + &deleted_line);
-            state.cursor.col = 0;
-            state.cursor.row = state.cursor.row.min(state.lines.len().saturating_sub(1));
+            if wrap {
+                let width = state.view.screen_area.width as usize;
+                let tab_width = state.view.tab_width;
+                let row = state.cursor.row;
+                let col = state.cursor.col;
+
+                let visual_count = state
+                    .lines
+                    .get(jagged::index::RowIndex::new(row))
+                    .map_or(1, |l| visual_line_count_for_row(l, width, tab_width));
+
+                if visual_count <= 1 {
+                    let row_index = RowIndex::new(row);
+                    let deleted_line = state.lines.remove(row_index).iter().collect::<String>();
+                    state.clip.set_text(String::from('\n') + &deleted_line);
+                    state.cursor.col = 0;
+                    state.cursor.row = row.min(state.lines.len().saturating_sub(1));
+                } else {
+                    let (col_start, col_end) =
+                        cursor_visual_line_range(&state.lines, row, col, width, tab_width);
+                    let row_index = RowIndex::new(row);
+                    if let Some(line) = state.lines.get_mut(row_index) {
+                        let end = col_end.min(line.len());
+                        let start = col_start.min(end);
+                        let deleted: String = line.drain(start..end).collect();
+                        state.clip.set_text(deleted);
+                        let new_len = line.len();
+                        state.cursor.col =
+                            col_start.min(if new_len == 0 { 0 } else { new_len - 1 });
+                    }
+                }
+            } else {
+                let row_index = RowIndex::new(state.cursor.row);
+                let deleted_line = state.lines.remove(row_index).iter().collect::<String>();
+                state.clip.set_text(String::from('\n') + &deleted_line);
+                state.cursor.col = 0;
+                state.cursor.row = state.cursor.row.min(state.lines.len().saturating_sub(1));
+            }
         }
     }
 }
 
-/// Deletes from the current cursor position to the first non-whitespace character of the line
+/// Deletes from the current cursor position to the first non-whitespace character of the
+/// line (or visual line when wrap is on).
 #[derive(Clone, Debug, Copy)]
 pub struct DeleteToFirstCharOfLine;
 
@@ -165,19 +203,35 @@ impl Execute for DeleteToFirstCharOfLine {
     fn execute(&mut self, state: &mut EditorState) {
         state.capture();
 
-        let row_index = RowIndex::new(state.cursor.row);
+        let wrap = state.view.wrap && state.view.screen_area.width > 0;
+        let col = state.cursor.col;
+        let row_num = state.cursor.row;
+
+        let (line_start, line_end) = if wrap {
+            let width = state.view.screen_area.width as usize;
+            let tab_width = state.view.tab_width;
+            cursor_visual_line_range(&state.lines, row_num, col, width, tab_width)
+        } else {
+            let line_len = state
+                .lines
+                .get(jagged::index::RowIndex::new(row_num))
+                .map_or(0, |l| l.len());
+            (0, line_len)
+        };
+
+        let row_index = RowIndex::new(row_num);
         let Some(row) = state.lines.get_mut(row_index) else {
             return;
         };
 
-        let col = state.cursor.col;
-
-        let first_char = row
+        let clamped_end = line_end.min(row.len());
+        let first_char = row[line_start..clamped_end]
             .iter()
             .position(|c| !c.is_whitespace())
-            .unwrap_or(row.len());
+            .map(|p| line_start + p)
+            .unwrap_or(line_start);
 
-        let anchor = if col <= first_char { 0 } else { first_char };
+        let anchor = if col <= first_char { line_start } else { first_char };
 
         if anchor < col && col <= row.len() {
             let deleted = row.drain(anchor..col).collect();
@@ -188,7 +242,8 @@ impl Execute for DeleteToFirstCharOfLine {
     }
 }
 
-/// Deletes from the current cursor position to the end of the line
+/// Deletes from the current cursor position to the end of the line (or visual line when
+/// wrap is on).
 #[derive(Clone, Debug, Copy)]
 pub struct DeleteToEndOfLine;
 
@@ -198,12 +253,28 @@ impl Execute for DeleteToEndOfLine {
             return;
         }
         state.capture();
-        let Some(row) = state.lines.get_mut(RowIndex::new(state.cursor.row)) else {
+
+        let wrap = state.view.wrap && state.view.screen_area.width > 0;
+        let cursor_col = state.cursor.col;
+        let cursor_row = state.cursor.row;
+
+        let drain_end = if wrap {
+            let width = state.view.screen_area.width as usize;
+            let tab_width = state.view.tab_width;
+            let (_, col_end) =
+                cursor_visual_line_range(&state.lines, cursor_row, cursor_col, width, tab_width);
+            col_end
+        } else {
+            usize::MAX
+        };
+
+        let Some(row) = state.lines.get_mut(RowIndex::new(cursor_row)) else {
             return;
         };
-        let deleted_chars = row.drain(state.cursor.col..);
-        state.cursor.col = state.cursor.col.saturating_sub(1);
-        state.clip.set_text(deleted_chars.collect());
+        let end = drain_end.min(row.len());
+        let deleted: String = row.drain(cursor_col..end).collect();
+        state.cursor.col = cursor_col.saturating_sub(1);
+        state.clip.set_text(deleted);
     }
 }
 
@@ -411,6 +482,91 @@ mod tests {
         DeleteCharForward(1).execute(&mut state);
         assert_eq!(state.cursor, Index2::new(0, 10));
         assert_eq!(state.lines, Lines::from("llo World!Next line"));
+    }
+
+    fn wrap_state(text: &str, width: u16) -> EditorState {
+        use ratatui_core::layout::Rect;
+        let mut state = EditorState::new(Lines::from(text));
+        state.view.screen_area = Rect { x: 0, y: 0, width, height: 20 };
+        state
+    }
+
+    #[test]
+    fn test_delete_line_wrap_single_visual_row() {
+        // "Hello\nWorld" at width 20: each line is a single visual row.
+        // dd on line 0 should delete the entire logical line.
+        let mut state = wrap_state("Hello\nWorld", 20);
+        state.cursor = Index2::new(0, 2);
+        DeleteLine(1).execute(&mut state);
+        assert_eq!(state.lines, Lines::from("World"));
+        assert_eq!(state.cursor, Index2::new(0, 0));
+    }
+
+    #[test]
+    fn test_delete_line_wrap_multi_visual_row_first() {
+        // "0123456789" at width 4 → visual rows: ["0123", "4567", "89"].
+        // Cursor on first visual row (col 1) → drain [0, 4) → line becomes "456789".
+        let mut state = wrap_state("0123456789", 4);
+        state.cursor = Index2::new(0, 1);
+        DeleteLine(1).execute(&mut state);
+        assert_eq!(state.lines, Lines::from("456789"));
+        assert_eq!(state.cursor.row, 0);
+        assert_eq!(state.cursor.col, 0);
+    }
+
+    #[test]
+    fn test_delete_line_wrap_multi_visual_row_middle() {
+        // Cursor on second visual row (col 5) → drain [4, 8) → line becomes "012389".
+        let mut state = wrap_state("0123456789", 4);
+        state.cursor = Index2::new(0, 5);
+        DeleteLine(1).execute(&mut state);
+        assert_eq!(state.lines, Lines::from("012389"));
+        assert_eq!(state.cursor.col, 4);
+    }
+
+    #[test]
+    fn test_delete_line_wrap_multi_visual_row_last() {
+        // Cursor on last visual row (col 8) → drain [8, 10) → line becomes "01234567".
+        let mut state = wrap_state("0123456789", 4);
+        state.cursor = Index2::new(0, 8);
+        DeleteLine(1).execute(&mut state);
+        assert_eq!(state.lines, Lines::from("01234567"));
+        assert_eq!(state.cursor.col, 7);
+    }
+
+    #[test]
+    fn test_delete_to_end_of_line_wrap() {
+        // "0123456789" at width 4: cursor at col 5 (second visual row).
+        // D deletes [5, 8) → "01234" + "89" = "0123489".
+        let mut state = wrap_state("0123456789", 4);
+        state.cursor = Index2::new(0, 5);
+        DeleteToEndOfLine.execute(&mut state);
+        assert_eq!(state.lines, Lines::from("0123489"));
+        assert_eq!(state.cursor.col, 4);
+    }
+
+    #[test]
+    fn test_delete_to_end_of_line_no_wrap_unchanged() {
+        let mut state = EditorState::new(Lines::from("Hello World!"));
+        state.view.wrap = false;
+        state.cursor = Index2::new(0, 3);
+        DeleteToEndOfLine.execute(&mut state);
+        assert_eq!(state.lines, Lines::from("Hel"));
+        assert_eq!(state.cursor.col, 2);
+    }
+
+    #[test]
+    fn test_delete_to_first_char_wrap() {
+        // "  abcd  efgh" at width 8: visual rows ["  abcd  ", "efgh"].
+        // Cursor at col 9 on second visual row "efgh" → col_start=8, first non-ws=8.
+        // col <= first_char, so anchor = col_start = 8. Nothing deleted.
+        let mut state = wrap_state("  abcd  efgh", 8);
+        state.cursor = Index2::new(0, 9);
+        DeleteToFirstCharOfLine.execute(&mut state);
+        // cursor at first non-ws of visual row which is col 8; cursor was at 9 > 8
+        // anchor = first_char=8, delete [8..9] → "  abcd  fgh"
+        assert_eq!(state.cursor.col, 8);
+        assert_eq!(state.lines, Lines::from("  abcd  fgh"));
     }
 
     #[test]

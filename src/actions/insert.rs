@@ -13,6 +13,7 @@ pub struct InsertChar(pub char);
 impl Execute for InsertChar {
     fn execute(&mut self, state: &mut EditorState) {
         insert_char(&mut state.lines, &mut state.cursor, self.0, false);
+        state.update_desired_display_col();
     }
 }
 
@@ -28,6 +29,7 @@ impl Execute for LineBreak {
         for _ in 0..self.0 {
             line_break(&mut state.lines, &mut state.cursor);
         }
+        state.update_desired_display_col();
     }
 }
 
@@ -49,6 +51,7 @@ impl Execute for AppendNewline {
                 state.lines.push(vec![]);
             }
         }
+        state.update_desired_display_col();
     }
 }
 
@@ -62,6 +65,7 @@ impl Execute for InsertNewline {
         for _ in 0..self.0 {
             state.lines.insert(RowIndex::new(state.cursor.row), vec![]);
         }
+        state.update_desired_display_col();
     }
 }
 
